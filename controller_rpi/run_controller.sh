@@ -43,29 +43,51 @@ if ! command -v cansend &> /dev/null; then
     apt-get install -y can-utils
 fi
 
-# Configure CAN interface
-if ip link show can0 &> /dev/null; then
-    print_status "Configuring CAN interface can0..."
-    ip link set can0 down 2>/dev/null || true
-    ip link set can0 type can bitrate 500000
-    ip link set can0 up
-    print_status "CAN interface ready"
+# Configure CAN interfaces (both can0 and can1)
+configure_can_interface() {
+    local interface=$1
+    if ip link show $interface &> /dev/null; then
+        print_status "Configuring CAN interface $interface..."
+        ip link set $interface down 2>/dev/null || true
+        ip link set $interface type can bitrate 500000
+        ip link set $interface up
+        print_status "CAN interface $interface ready"
+        return 0
+    else
+        print_warning "CAN interface $interface not found"
+        return 1
+    fi
+}
+
+# Try to configure both CAN interfaces
+can0_ok=false
+can1_ok=false
+
+if configure_can_interface can0; then
+    can0_ok=true
+fi
+
+if configure_can_interface can1; then
+    can1_ok=true
+fi
+
+if [ "$can1_ok" = true ]; then
+    print_status "BMW gear control will use can1"
+elif [ "$can0_ok" = true ]; then
+    print_status "BMW gear control will use can0 as fallback"
 else
-    print_warning "CAN interface can0 not found - BMW gear control disabled"
+    print_warning "No CAN interfaces available - BMW gear control disabled"
 fi
 
 # Check Python dependencies
 print_status "Checking Python dependencies..."
 if [ -f "requirements.txt" ]; then
-    python3 -m pip install -r requirements.txt --user --break-system-packages 2>/dev/null || {
-        print_warning "Creating virtual environment..."
-        python3 -m venv venv
-        source venv/bin/activate
-        pip install -r requirements.txt
-    }
+    source venv/bin/activate
+    pip install -r requirements.txt
 else
     print_warning "requirements.txt not found - installing basic dependencies"
-    python3 -m pip install pyyaml --user --break-system-packages
+    source venv/bin/activate
+    pip install pyyaml
 fi
 
 # Check gamepad connection
@@ -80,7 +102,7 @@ fi
 mkdir -p logs
 
 # Set environment variables
-export PYTHONPATH="/home/pi/SEA-ME-RCcarCluster/BMW_GWS/modular_version:$PYTHONPATH"
+export PYTHONPATH="/home/pi/controller_rpi:$PYTHONPATH"
 
 # Function to handle cleanup
 cleanup() {
@@ -99,7 +121,7 @@ print_status "Starting controller main program..."
 print_status "Press Ctrl+C to stop"
 echo "=" * 50
 
-python3 controller_main.py
+source venv/bin/activate && python controller_main.py
 
 # Cleanup on exit
 cleanup
