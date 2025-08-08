@@ -1,0 +1,16 @@
+# RC Car Controller Requirements
+# Install with: pip install -r requirements.txt
+
+# Core PiRacer library (if available)
+# piracer
+
+# BMW CAN control (already available in SEA-ME-RCcarCluster)
+python-can>=4.0.0
+crccheck>=2.0.0
+
+# System and networking
+RPi.GPIO>=0.7.1
+psutil>=5.8.0
+
+# Logging and configuration
+pyyaml>=6.0

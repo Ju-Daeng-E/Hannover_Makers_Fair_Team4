@@ -1,0 +1,19 @@
+# RC Car Vehicle Requirements  
+# Install with: pip install -r requirements.txt
+
+# Core PiRacer library (if available)
+# piracer
+
+# Camera and streaming
+opencv-python>=4.5.0
+flask>=2.0.0
+picamera2>=0.3.0
+
+# Display and GUI
+pygame>=2.1.0
+
+# System and networking
+psutil>=5.8.0
+
+# Logging and configuration
+pyyaml>=6.0
