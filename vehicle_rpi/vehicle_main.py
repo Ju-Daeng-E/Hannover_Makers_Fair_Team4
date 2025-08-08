@@ -17,9 +17,20 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from multiprocessing import Process, Value, Array
 
+# Add piracer library path to sys.path
+PIRACER_PATHS = [
+    "/home/pi/piracer_test/venv/lib/python3.11/site-packages",
+    "/home/pi/SEA-ME-RCcarCluster/piracer_team4/venv/lib/python3.11/site-packages"
+]
+
+for path in PIRACER_PATHS:
+    if os.path.exists(path) and path not in sys.path:
+        sys.path.insert(0, path)
+
 try:
     from piracer.vehicles import PiRacerStandard
     PIRACER_AVAILABLE = True
+    print("✅ PiRacer library loaded from venv path")
 except ImportError:
     print("⚠️ PiRacer library not available - using mock vehicle")
     PIRACER_AVAILABLE = False
@@ -413,9 +424,9 @@ class VehicleSystem:
                     throttle = 0.0  # Don't allow forward in reverse
             elif gear == 'D' or gear.startswith('M'):
                 # Drive or Manual - normal operation
-                if throttle > 0:  # Backward input in forward gear
+                if throttle < 0:  # Backward input in forward gear
                     throttle = 0.0  # Don't allow backward in forward
-                # Forward input (negative) is allowed
+                # Forward input (positive) is allowed
             
             # Apply speed limit
             throttle = max(-speed_limit, min(speed_limit, throttle))

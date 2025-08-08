@@ -211,17 +211,74 @@ class CameraStreamer:
             max-width: 800px;
             margin: 0 auto;
         }
-        .video-container {
+        .video-wrapper {
+            position: relative;
             margin: 20px 0;
+            display: inline-block;
+        }
+        .video-container {
             border: 2px solid #333;
             border-radius: 10px;
             overflow: hidden;
-            display: inline-block;
+            background: #000;
+        }
+        .video-container.fullscreen {
+            border: none;
+            border-radius: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 9999;
+            background: #000;
         }
         img {
             max-width: 100%;
             height: auto;
             display: block;
+        }
+        .fullscreen img {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+        }
+        .fullscreen-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            z-index: 10000;
+            transition: background 0.3s ease;
+        }
+        .fullscreen-btn:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+        .fullscreen-btn:active {
+            transform: scale(0.95);
+        }
+        .exit-fullscreen {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 0, 0, 0.8);
+            color: white;
+            border: none;
+            padding: 15px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 18px;
+            z-index: 10001;
+            display: none;
+        }
+        .exit-fullscreen:hover {
+            background: rgba(255, 0, 0, 1);
         }
         .info {
             background-color: #333;
@@ -236,6 +293,22 @@ class CameraStreamer:
         h1 {
             color: #4CAF50;
         }
+        .controls {
+            margin: 15px 0;
+        }
+        .control-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .control-btn:hover {
+            background: #45a049;
+        }
     </style>
 </head>
 <body>
@@ -248,17 +321,143 @@ class CameraStreamer:
             <p>🌐 Stream URL: http://[vehicle-ip]:{{ port }}/video_feed</p>
         </div>
         
-        <div class="video-container">
-            <img src="{{ url_for('video_feed') }}" alt="Live Stream">
+        <div class="video-wrapper">
+            <div class="video-container" id="videoContainer">
+                <img src="{{ url_for('video_feed') }}" alt="Live Stream" id="videoStream">
+                <button class="fullscreen-btn" onclick="toggleFullscreen()" id="fullscreenBtn">⛶ 전체화면</button>
+            </div>
+        </div>
+        
+        <button class="exit-fullscreen" onclick="exitFullscreen()" id="exitBtn">✕ 전체화면 종료</button>
+        
+        <div class="controls">
+            <button class="control-btn" onclick="refreshStream()">🔄 새로고침</button>
+            <button class="control-btn" onclick="window.open('/video_feed', '_blank')">🔗 스트림만 보기</button>
         </div>
         
         <div class="info">
-            <p>💡 <strong>How to use:</strong></p>
-            <p>• Direct video access: <code>/video_feed</code></p>
+            <p>💡 <strong>사용법:</strong></p>
+            <p>• 전체화면 버튼을 클릭하여 전체화면으로 시청</p>
+            <p>• ESC 키 또는 종료 버튼으로 전체화면 해제</p>
+            <p>• 직접 스트림 접근: <code>/video_feed</code></p>
             <p>• VLC/OBS URL: <code>http://[vehicle-ip]:{{ port }}/video_feed</code></p>
-            <p>• Mobile friendly responsive design</p>
         </div>
     </div>
+
+    <script>
+        let isFullscreen = false;
+        const videoContainer = document.getElementById('videoContainer');
+        const videoStream = document.getElementById('videoStream');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+        const exitBtn = document.getElementById('exitBtn');
+
+        function toggleFullscreen() {
+            if (!isFullscreen) {
+                enterFullscreen();
+            } else {
+                exitFullscreen();
+            }
+        }
+
+        function enterFullscreen() {
+            // 브라우저 전체화면 API 사용
+            if (videoContainer.requestFullscreen) {
+                videoContainer.requestFullscreen();
+            } else if (videoContainer.mozRequestFullScreen) {
+                videoContainer.mozRequestFullScreen();
+            } else if (videoContainer.webkitRequestFullscreen) {
+                videoContainer.webkitRequestFullscreen();
+            } else if (videoContainer.msRequestFullscreen) {
+                videoContainer.msRequestFullscreen();
+            } else {
+                // 전체화면 API가 지원되지 않는 경우 CSS로 전체화면 효과
+                customFullscreen();
+            }
+        }
+
+        function customFullscreen() {
+            videoContainer.classList.add('fullscreen');
+            fullscreenBtn.style.display = 'none';
+            exitBtn.style.display = 'block';
+            isFullscreen = true;
+            
+            // 스크롤 방지
+            document.body.style.overflow = 'hidden';
+        }
+
+        function exitFullscreen() {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else if (document.mozCancelFullScreen) {
+                document.mozCancelFullScreen();
+            } else if (document.webkitExitFullscreen) {
+                document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) {
+                document.msExitFullscreen();
+            } else {
+                // 커스텀 전체화면 해제
+                customExitFullscreen();
+            }
+        }
+
+        function customExitFullscreen() {
+            videoContainer.classList.remove('fullscreen');
+            fullscreenBtn.style.display = 'block';
+            exitBtn.style.display = 'none';
+            isFullscreen = false;
+            
+            // 스크롤 복원
+            document.body.style.overflow = '';
+        }
+
+        function refreshStream() {
+            const timestamp = new Date().getTime();
+            videoStream.src = "{{ url_for('video_feed') }}" + "?t=" + timestamp;
+        }
+
+        // 전체화면 상태 변화 감지
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        document.addEventListener('msfullscreenchange', handleFullscreenChange);
+
+        function handleFullscreenChange() {
+            const isCurrentlyFullscreen = !!(document.fullscreenElement || 
+                document.mozFullScreenElement || 
+                document.webkitFullscreenElement || 
+                document.msFullscreenElement);
+            
+            if (isCurrentlyFullscreen) {
+                fullscreenBtn.style.display = 'none';
+                exitBtn.style.display = 'block';
+                isFullscreen = true;
+            } else {
+                fullscreenBtn.style.display = 'block';
+                exitBtn.style.display = 'none';
+                isFullscreen = false;
+                videoContainer.classList.remove('fullscreen');
+                document.body.style.overflow = '';
+            }
+        }
+
+        // ESC 키로 전체화면 해제
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && isFullscreen) {
+                exitFullscreen();
+            }
+        });
+
+        // 스트림 로드 오류 처리
+        videoStream.addEventListener('error', function() {
+            console.log('스트림 로딩 오류 - 자동 새로고침 시도');
+            setTimeout(refreshStream, 2000);
+        });
+
+        // 페이지 로드 완료시 스트림 상태 확인
+        window.addEventListener('load', function() {
+            console.log('RC Car 스트리밍 페이지 로드 완료');
+        });
+    </script>
 </body>
 </html>
             ''', width=self.width, height=self.height, fps=self.fps, port=self.port)
