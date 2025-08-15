@@ -10,6 +10,7 @@ import threading
 import logging
 from datetime import datetime
 from flask import Flask, Response, render_template_string
+from speed_sensor import SpeedSensor
 
 try:
     import cv2
@@ -28,7 +29,8 @@ except ImportError:
 class CameraStreamer:
     """Camera streaming handler with multiple camera support"""
     
-    def __init__(self, port: int = 8080, width: int = 640, height: int = 480, fps: int = 30):
+    def __init__(self, port: int = 8080, width: int = 800, height: int = 600, fps: int = 30, 
+                 enable_speed_sensor: bool = True, speed_gpio_pin: int = 16):
         self.port = port
         self.width = width
         self.height = height
@@ -39,9 +41,17 @@ class CameraStreamer:
         self.frame = None
         self.lock = threading.Lock()
         
+        # Speed sensor
+        self.enable_speed_sensor = enable_speed_sensor
+        self.speed_sensor = None
+        
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize speed sensor
+        if self.enable_speed_sensor:
+            self.setup_speed_sensor(speed_gpio_pin)
         
         # Initialize camera
         self.setup_camera()
@@ -49,6 +59,32 @@ class CameraStreamer:
         # Flask app for streaming
         self.app = Flask(__name__)
         self.setup_routes()
+    
+    def setup_speed_sensor(self, gpio_pin: int):
+        """Setup speed sensor for RPM and speed monitoring"""
+        try:
+            # Try real sensor first, fallback to simulation
+            self.speed_sensor = SpeedSensor(
+                gpio_pin=gpio_pin,
+                pulses_per_turn=40,  # Same as Arduino code
+                wheel_diameter_mm=64,  # Same as Arduino code
+                simulation_mode=False  # Try real sensor first
+            )
+            self.logger.info(f"✅ Speed sensor initialized on GPIO {gpio_pin}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Real speed sensor failed: {e}")
+            # Fallback to simulation mode
+            try:
+                self.speed_sensor = SpeedSensor(
+                    gpio_pin=gpio_pin,
+                    pulses_per_turn=40,
+                    wheel_diameter_mm=64,
+                    simulation_mode=True
+                )
+                self.logger.info(f"✅ Speed sensor initialized (simulation mode fallback)")
+            except Exception as e2:
+                self.logger.error(f"❌ Speed sensor setup completely failed: {e2}")
+                self.speed_sensor = None
     
     def setup_camera(self):
         """Setup camera based on availability"""
@@ -110,8 +146,26 @@ class CameraStreamer:
                     except:
                         pass
         
-        # Fallback message - OpenCV won't work with this camera setup
-        self.logger.error("❌ Camera requires PiCamera2 - please install: pip install picamera2")
+        # Fallback to USB camera if available
+        for i in range(4):  # Try video0 to video3
+            try:
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    # Test if we can read from this camera
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                        cap.set(cv2.CAP_PROP_FPS, self.fps)
+                        self.cap = cap
+                        self.logger.info(f"✅ USB Camera initialized at /dev/video{i}")
+                        return True
+                    cap.release()
+            except Exception as e:
+                self.logger.debug(f"Failed to initialize camera {i}: {e}")
+                continue
+        
+        self.logger.error("❌ No camera available")
         return False
     
     def capture_frame(self):
@@ -120,16 +174,14 @@ class CameraStreamer:
             if self.camera:  # PiCamera2
                 frame = self.camera.capture_array()
                 
-                # PiCamera2 gives RGB format
-                # For proper web streaming, we need BGR format for OpenCV operations
-                # But the color issue might be due to incorrect conversion
-                
                 # Fix vertical flip issue first
                 frame = cv2.flip(frame, 0)  # 0 = flip vertically (upside down fix)
+                # Fix horizontal flip (left-right mirror)
+                frame = cv2.flip(frame, 1)  # 1 = flip horizontally (left-right mirror fix)
                 
                 # PiCamera2 outputs RGB format which is correct for web streaming
                 # No color conversion needed - keep RGB format
-                # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # This was causing red/blue swap
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # This was causing red/blue swap
                 
                 return frame
                 
@@ -138,6 +190,8 @@ class CameraStreamer:
                 if ret:
                     # Fix vertical flip for USB camera too if needed
                     frame = cv2.flip(frame, 0)
+                    # Fix horizontal flip (left-right mirror)
+                    frame = cv2.flip(frame, 1)
                     return frame
                     
         except Exception as e:
@@ -157,8 +211,11 @@ class CameraStreamer:
                 # Convert RGB to BGR only for JPEG encoding (OpenCV expects BGR)
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                # Encode frame as JPEG with optimized settings for low latency
+                ret, buffer = cv2.imencode('.jpg', frame_bgr, [
+                    cv2.IMWRITE_JPEG_QUALITY, 75,  # Good quality but not too high
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 1,
+                ])
                 if ret:
                     with self.lock:
                         self.frame = buffer.tobytes()
@@ -172,13 +229,34 @@ class CameraStreamer:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cv2.putText(frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
+            # Add speed information if available
+            if self.speed_sensor:
+                speed_data = self.speed_sensor.get_speed_data()
+                
+                # Check if data is fresh (within 2 seconds)
+                if speed_data['age_seconds'] <= 2.0:
+                    # Add RPM (RGB format: Cyan = (0, 255, 255))
+                    rpm_text = f"RPM: {speed_data['rpm']}"
+                    cv2.putText(frame, rpm_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                    
+                    # Add Speed in km/h (RGB format: Yellow = (255, 255, 0))
+                    speed_text = f"Speed: {speed_data['speed_kmh']:.1f} km/h"
+                    cv2.putText(frame, speed_text, (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                    
+                    # Add Speed in m/s (RGB format: Orange = (255, 165, 0))
+                    speed_ms_text = f"({speed_data['speed_ms']:.2f} m/s)"
+                    cv2.putText(frame, speed_ms_text, (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+                else:
+                    # Show "No Speed Data" if data is stale
+                    cv2.putText(frame, "Speed: No Data", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
+            
             # Add system info (RGB format: White = (255, 255, 255))
             cv2.putText(frame, "RC Car Live Stream", (10, frame.shape[0] - 20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
-            # Add frame size info (RGB format: Yellow = (255, 255, 0))
+            # Add frame size info (RGB format: Light Blue = (173, 216, 230))
             size_info = f"{frame.shape[1]}x{frame.shape[0]} @ {self.fps}fps"
-            cv2.putText(frame, size_info, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            cv2.putText(frame, size_info, (10, frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (173, 216, 230), 1)
             
         except Exception as e:
             self.logger.warning(f"⚠️ Overlay error: {e}")
@@ -241,7 +319,7 @@ class CameraStreamer:
         .fullscreen img {
             width: 100vw;
             height: 100vh;
-            object-fit: contain;
+            object-fit: cover;
         }
         .fullscreen-btn {
             position: absolute;
@@ -255,13 +333,9 @@ class CameraStreamer:
             cursor: pointer;
             font-size: 16px;
             z-index: 10000;
-            transition: background 0.3s ease;
         }
         .fullscreen-btn:hover {
             background: rgba(0, 0, 0, 0.9);
-        }
-        .fullscreen-btn:active {
-            transform: scale(0.95);
         }
         .exit-fullscreen {
             position: fixed;
@@ -465,8 +539,10 @@ class CameraStreamer:
         @self.app.route('/video_feed')
         def video_feed():
             """Video streaming route"""
-            return Response(self.generate_stream(), 
-                          mimetype='multipart/x-mixed-replace; boundary=frame')
+            return Response(
+                self.generate_stream(), 
+                mimetype='multipart/x-mixed-replace; boundary=frame'
+            )
         
         @self.app.route('/status')
         def status():
@@ -475,6 +551,7 @@ class CameraStreamer:
                 'streaming': self.streaming,
                 'resolution': f"{self.width}x{self.height}",
                 'fps': self.fps,
+                'camera_type': 'PiCamera2' if self.camera else 'USB',
                 'timestamp': datetime.now().isoformat()
             }
     
@@ -485,13 +562,20 @@ class CameraStreamer:
                 if self.frame is not None:
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + self.frame + b'\r\n')
-            time.sleep(0.033)  # ~30fps max
+            time.sleep(0.01)  # Very low latency
     
     def start_streaming(self):
         """Start camera streaming"""
         if not CV2_AVAILABLE or (not self.camera and not self.cap):
             self.logger.error("❌ Cannot start streaming - no camera available")
             return False
+        
+        # Start speed sensor if enabled
+        if self.speed_sensor:
+            if self.speed_sensor.start():
+                self.logger.info("✅ Speed sensor started")
+            else:
+                self.logger.warning("⚠️ Speed sensor failed to start")
         
         self.streaming = True
         
@@ -513,6 +597,11 @@ class CameraStreamer:
         """Stop camera streaming"""
         self.streaming = False
         
+        # Stop speed sensor
+        if self.speed_sensor:
+            self.speed_sensor.stop()
+            self.logger.info("🛑 Speed sensor stopped")
+        
         if self.camera:
             self.camera.stop()
             self.camera.close()
@@ -528,9 +617,12 @@ def main():
     
     parser = argparse.ArgumentParser(description='RC Car Camera Streaming Server')
     parser.add_argument('--port', type=int, default=8080, help='Streaming port (default: 8080)')
-    parser.add_argument('--width', type=int, default=640, help='Frame width (default: 640)')
-    parser.add_argument('--height', type=int, default=480, help='Frame height (default: 480)')
+    parser.add_argument('--width', type=int, default=800, help='Frame width (default: 800)')
+    parser.add_argument('--height', type=int, default=600, help='Frame height (default: 600)')
     parser.add_argument('--fps', type=int, default=30, help='Frame rate (default: 30)')
+    parser.add_argument('--no-speed', action='store_true', help='Disable speed sensor')
+    parser.add_argument('--speed-gpio', type=int, default=16, help='Speed sensor GPIO pin (default: 16)')
+    parser.add_argument('--speed-sim', action='store_true', help='Use speed simulation mode')
     
     args = parser.parse_args()
     
@@ -539,9 +631,17 @@ def main():
     print(f"🌐 Starting server on http://0.0.0.0:{args.port}")
     print(f"📱 Mobile access: http://[vehicle-ip]:{args.port}")
     print("🔗 Direct stream: http://[vehicle-ip]:{args.port}/video_feed")
+    print(f"🏎️ Speed sensor: {'Disabled' if args.no_speed else f'GPIO {args.speed_gpio}'}")
     print("=" * 40)
     
-    streamer = CameraStreamer(args.port, args.width, args.height, args.fps)
+    streamer = CameraStreamer(
+        port=args.port, 
+        width=args.width, 
+        height=args.height, 
+        fps=args.fps,
+        enable_speed_sensor=not args.no_speed,
+        speed_gpio_pin=args.speed_gpio
+    )
     
     try:
         streamer.start_streaming()

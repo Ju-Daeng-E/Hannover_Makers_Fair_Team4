@@ -42,6 +42,9 @@ except ImportError:
     print("⚠️ Pygame not available - dashboard disabled")
     PYGAME_AVAILABLE = False
 
+# Import speed sensor
+from speed_sensor import SpeedSensor
+
 @dataclass
 class ControlData:
     """Control data structure for receiving"""
@@ -178,7 +181,7 @@ class Dashboard:
         self.font = pygame.font.Font(None, 36)
         self.clock = pygame.time.Clock()
         
-    def update(self, control_data: ControlData, connection_status: str):
+    def update(self, control_data: ControlData, connection_status: str, speed_data: Dict = None):
         """Update dashboard display"""
         if not PYGAME_AVAILABLE:
             return
@@ -205,9 +208,16 @@ class Dashboard:
             self.screen.blit(steering_text, (10, 90))
             self.screen.blit(gear_text, (10, 130))
             
+            # Speed sensor data display
+            if speed_data:
+                speed_text = self.font.render(f"Speed: {speed_data['speed_kmh']:.1f} km/h", True, (0, 255, 255))
+                rpm_text = self.font.render(f"RPM: {speed_data['rpm']}", True, (0, 255, 255))
+                self.screen.blit(speed_text, (10, 170))
+                self.screen.blit(rpm_text, (10, 210))
+            
             # Timestamp
             time_text = self.font.render(f"Last Update: {datetime.now().strftime('%H:%M:%S')}", True, (128, 128, 128))
-            self.screen.blit(time_text, (10, 170))
+            self.screen.blit(time_text, (10, 250))
             
             pygame.display.flip()
             self.clock.tick(30)  # 30 FPS
@@ -283,6 +293,21 @@ class VehicleSystem:
         # Initialize dashboard
         self.dashboard = Dashboard()
         
+        # Initialize speed sensor
+        try:
+            self.speed_sensor = SpeedSensor(
+                gpio_pin=16,          # GPIO pin for speed sensor
+                pulses_per_turn=40,   # Encoder pulses per revolution
+                wheel_diameter_mm=64, # Wheel diameter in mm
+                simulation_mode=not PIRACER_AVAILABLE  # Use simulation if no hardware
+            )
+            self.current_speed_data = {'rpm': 0, 'speed_kmh': 0.0, 'speed_ms': 0.0}
+            self.logger.info("✅ Speed sensor initialized")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Speed sensor initialization failed: {e}")
+            self.speed_sensor = None
+            self.current_speed_data = {'rpm': 0, 'speed_kmh': 0.0, 'speed_ms': 0.0}
+        
         # Control state
         self.current_control = ControlData()
         self.last_received = 0
@@ -295,14 +320,14 @@ class VehicleSystem:
             'N': 0.0,    # Neutral - no movement  
             'R': 0.4,    # Reverse - 40% max
             'D': 1.0,    # Drive - 100% max
-            'M1': 0.25,  # Manual 1 - 25% max
-            'M2': 0.5,   # Manual 2 - 50% max
-            'M3': 0.75,  # Manual 3 - 75% max
-            'M4': 1.0,   # Manual 4 - 100% max
-            'M5': 1.0,   # Manual 5 - 100% max
-            'M6': 1.0,   # Manual 6 - 100% max
-            'M7': 1.0,   # Manual 7 - 100% max
-            'M8': 1.0,   # Manual 8 - 100% max
+            'M1': 0.1,  # Manual 1 - 25% max
+            'M2': 0.2,   # Manual 2 - 50% max
+            'M3': 0.3,  # Manual 3 - 75% max
+            'M4': 0.4,   # Manual 4 - 100% max
+            'M5': 0.5,   # Manual 5 - 100% max
+            'M6': 0.6,   # Manual 6 - 100% max
+            'M7': 0.7,   # Manual 7 - 100% max
+            'M8': 0.8,   # Manual 8 - 100% max
         }
     
     def setup_server(self) -> bool:
@@ -413,15 +438,21 @@ class VehicleSystem:
             throttle = self.current_control.throttle
             steering = self.current_control.steering
             
+            # POWER MANAGEMENT: Limit max output to prevent undervoltage reboot
+            MAX_THROTTLE_LIMIT = 0.75  # 75% max to prevent power issues
+            MAX_STEERING_LIMIT = 0.8   # 80% max for steering
+            
             if gear == 'P' or gear == 'N':
                 # Park or Neutral - no movement
                 throttle = 0.0
             elif gear == 'R':
-                # Reverse - invert throttle direction if needed
-                if throttle < 0:  # Forward input in reverse gear
-                    throttle = abs(throttle)  # Make it go backwards
-                elif throttle > 0:  # Backward input in reverse gear  
-                    throttle = 0.0  # Don't allow forward in reverse
+                # Reverse - invert throttle direction
+                if throttle > 0:  # Forward input in reverse gear should go backward
+                    throttle = 0.0 # Make it go backwards
+                elif throttle < 0:
+                    throttle = throttle
+                # elif throttle < 0:  # Backward input in reverse gear should go forward
+                #     throttle = 0.0  # Invert to go forward
             elif gear == 'D' or gear.startswith('M'):
                 # Drive or Manual - normal operation
                 if throttle < 0:  # Backward input in forward gear
@@ -431,7 +462,11 @@ class VehicleSystem:
             # Apply speed limit
             throttle = max(-speed_limit, min(speed_limit, throttle))
             
-            # Apply to vehicle
+            # CRITICAL: Apply power limits to prevent reboot
+            throttle = max(-MAX_THROTTLE_LIMIT, min(MAX_THROTTLE_LIMIT, throttle))
+            steering = max(-MAX_STEERING_LIMIT, min(MAX_STEERING_LIMIT, steering))
+            
+            # Apply to vehicle (invert steering direction)
             self.vehicle.set_throttle_percent(throttle)
             self.vehicle.set_steering_percent(steering)
             
@@ -441,6 +476,17 @@ class VehicleSystem:
             self.vehicle.set_throttle_percent(0.0)
             self.vehicle.set_steering_percent(0.0)
     
+    def update_speed_data(self):
+        """Update speed sensor data in separate thread"""
+        while self.running:
+            try:
+                if self.speed_sensor:
+                    self.current_speed_data = self.speed_sensor.get_speed_data()
+                time.sleep(0.1)  # 10Hz update rate
+            except Exception as e:
+                self.logger.error(f"❌ Speed sensor update error: {e}")
+                time.sleep(1)  # Wait before retry
+
     def run_dashboard(self):
         """Run dashboard in separate thread"""
         if not PYGAME_AVAILABLE:
@@ -448,7 +494,7 @@ class VehicleSystem:
             
         try:
             while self.running:
-                if not self.dashboard.update(self.current_control, self.connection_status):
+                if not self.dashboard.update(self.current_control, self.connection_status, self.current_speed_data):
                     break
                 time.sleep(0.033)  # ~30 FPS
         except Exception as e:
@@ -465,10 +511,21 @@ class VehicleSystem:
         # Start camera streaming
         self.camera_streamer.start_streaming()
         
+        # Start speed sensor
+        if self.speed_sensor:
+            if self.speed_sensor.start():
+                self.logger.info("✅ Speed sensor started")
+            else:
+                self.logger.warning("⚠️ Speed sensor failed to start")
+        
         # Start dashboard thread
         if PYGAME_AVAILABLE:
             dashboard_thread = threading.Thread(target=self.run_dashboard, daemon=True)
             dashboard_thread.start()
+        
+        # Start speed data update thread
+        speed_thread = threading.Thread(target=self.update_speed_data, daemon=True)
+        speed_thread.start()
         
         self.running = True
         
@@ -496,7 +553,8 @@ class VehicleSystem:
                     
                     # Status logging (every 2 seconds)
                     if int(time.time()) % 2 == 0:
-                        self.logger.info(f"📊 T:{self.current_control.throttle:.2f} S:{self.current_control.steering:.2f} G:{self.current_control.gear}")
+                        speed_info = f" | Speed: {self.current_speed_data['speed_kmh']:.1f}km/h RPM:{self.current_speed_data['rpm']}" if self.speed_sensor else ""
+                        self.logger.info(f"📊 T:{self.current_control.throttle:.2f} S:{self.current_control.steering:.2f} G:{self.current_control.gear}{speed_info}")
                     
                     time.sleep(0.05)  # 20Hz update rate
                     
@@ -526,6 +584,10 @@ class VehicleSystem:
         
         # Stop camera streaming
         self.camera_streamer.stop_streaming()
+        
+        # Stop speed sensor
+        if self.speed_sensor:
+            self.speed_sensor.stop()
         
         # Cleanup dashboard
         self.dashboard.cleanup()

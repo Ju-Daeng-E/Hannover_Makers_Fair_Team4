@@ -70,7 +70,7 @@ elif command -v vcgencmd &> /dev/null && vcgencmd get_camera | grep -q "detected
 fi
 
 # Check for USB cameras
-for i in {0..3}; do
+for i in {0..15}; do
     if [ -e "/dev/video$i" ]; then
         print_status "USB camera detected at /dev/video$i"
         CAMERA_FOUND=true
@@ -159,7 +159,15 @@ export PYTHONNOUSERSITE=1
 
 # Use system Python to avoid numpy compatibility issues
 print_status "Starting vehicle with system Python environment..."
-/usr/bin/python3 vehicle_main.py
+
+# Check if user wants camera only mode
+if [ "$1" = "--camera-speed" ]; then
+    print_status "Starting camera streaming with speed sensor..."
+    /usr/bin/python3 camera_stream.py --port 8080
+else
+    # Start vehicle main program (which includes camera streaming)
+    /usr/bin/python3 vehicle_main.py
+fi
 
 # Cleanup on exit
 cleanup
