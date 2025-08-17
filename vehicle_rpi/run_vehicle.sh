@@ -94,8 +94,11 @@ IPS=$(hostname -I)
 for ip in $IPS; do
     if [[ $ip =~ ^192\.168\. ]] || [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\. ]]; then
         print_status "Vehicle IP: $ip"
-        print_status "🌐 Camera stream: http://$ip:8080"
+        print_status "🎛️  Vehicle Dashboard: http://$ip:8082"
+        print_status "📹 Camera stream: http://$ip:8080"
         print_status "🎮 Control port: 8888"
+        print_status ""
+        print_status "📱 Access the full dashboard from any device on the network!"
         break
     fi
 done

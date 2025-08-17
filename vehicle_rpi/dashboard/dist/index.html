@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vehicle Dashboard</title>
+    <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+    <!-- Background Pattern -->
+    <div class="bg-pattern">
+        <div class="bg-radial"></div>
+        <div class="bg-diagonal"></div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <div class="logo">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m12 14.5 9-5.5-9-5.5-9 5.5 9 5.5z"/>
+                        <path d="m12 14.5 9-5.5-9-5.5-9 5.5 9 5.5z"/>
+                        <path d="m12 14.5 9-5.5-9-5.5-9 5.5 9 5.5z"/>
+                    </svg>
+                </div>
+                <div class="header-info">
+                    <h1>Vehicle Dashboard</h1>
+                    <p>Real-time vehicle monitoring</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="time-display" id="timeDisplay">
+                    00:00
+                </div>
+                <div class="date-display" id="dateDisplay">
+                    2024-01-01
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard -->
+        <div class="main-dashboard">
+            <!-- RPM Gauge - Left -->
+            <div class="gauge-section">
+                <div class="gauge-container rpm-gauge">
+                    <div class="gauge-glow"></div>
+                    <div class="gauge-background">
+                        <svg class="gauge-svg" width="200" height="200" viewBox="0 0 200 200">
+                            <defs>
+                                <linearGradient id="rpmGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stop-color="rgba(239, 68, 68, 0.3)"/>
+                                    <stop offset="100%" stop-color="#ef4444"/>
+                                </linearGradient>
+                            </defs>
+                            <!-- Background Circle -->
+                            <circle cx="100" cy="100" r="85" fill="none" stroke="rgba(85, 85, 85, 0.2)" stroke-width="12" stroke-linecap="round" stroke-dasharray="400 400" transform="rotate(-90 100 100)"/>
+                            <!-- Progress Circle -->
+                            <circle id="rpmProgress" cx="100" cy="100" r="85" fill="none" stroke="url(#rpmGradient)" stroke-width="12" stroke-linecap="round" stroke-dasharray="400 400" stroke-dashoffset="400" transform="rotate(-90 100 100)"/>
+                            <!-- Center Text -->
+                            <text x="100" y="90" text-anchor="middle" dominant-baseline="middle" fill="currentColor" font-size="32" font-weight="700" id="rpmValue">0</text>
+                            <text x="100" y="120" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="400" class="gauge-label">RPM</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Panel -->
+            <div class="center-panel">
+                <!-- Camera View -->
+                <div class="camera-container">
+                    <div class="camera-glow"></div>
+                    <div class="camera-background">
+                        <div class="camera-view" id="cameraView">
+                            <img src="/video_feed" alt="Camera Stream" class="camera-stream" id="cameraStream">
+                            <div class="camera-overlay">
+                                <div class="camera-crosshairs">
+                                    <div class="crosshair-center"></div>
+                                    <div class="crosshair-h"></div>
+                                    <div class="crosshair-v"></div>
+                                </div>
+                                <div class="recording-indicator">
+                                    <div class="rec-dot"></div>
+                                    <span>REC</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Info Panel -->
+                <div class="bottom-info">
+                    <!-- Gear Display -->
+                    <div class="gear-display">
+                        <div class="gear-glow"></div>
+                        <div class="gear-background">
+                            <div class="gear-value" id="gearValue">D</div>
+                            <div class="gear-label">GEAR</div>
+                        </div>
+                    </div>
+
+                    <!-- Status Indicators -->
+                    <div class="status-grid">
+                        <div class="status-item fuel-status">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="3" y1="22" x2="15" y2="22"/>
+                                <line x1="4" y1="9" x2="14" y2="9"/>
+                                <path d="m14 9 5-5v13h-5"/>
+                                <path d="m14 9-1-1v4l1 1"/>
+                            </svg>
+                            <div>
+                                <div class="status-label">FUEL</div>
+                                <div class="status-value fuel-value" id="fuelValue">75%</div>
+                            </div>
+                        </div>
+
+                        <div class="status-item temp-status">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>
+                            </svg>
+                            <div>
+                                <div class="status-label">TEMP</div>
+                                <div class="status-value temp-value" id="tempValue">90°C</div>
+                            </div>
+                        </div>
+
+                        <div class="status-item battery-status">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect width="16" height="10" x="2" y="7" rx="2" ry="2"/>
+                                <line x1="22" y1="11" x2="22" y2="13"/>
+                            </svg>
+                            <div>
+                                <div class="status-label">BATTERY</div>
+                                <div class="status-value battery-value" id="batteryValue">85%</div>
+                            </div>
+                        </div>
+
+                        <div class="status-item system-status">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                                <path d="M12 9v4"/>
+                                <path d="m12 17 .01 0"/>
+                            </svg>
+                            <div>
+                                <div class="status-label">STATUS</div>
+                                <div class="status-value system-value" id="systemValue">OK</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Speed Gauge - Right -->
+            <div class="gauge-section">
+                <div class="gauge-container speed-gauge">
+                    <div class="gauge-glow speed-glow"></div>
+                    <div class="gauge-background">
+                        <svg class="gauge-svg" width="200" height="200" viewBox="0 0 200 200">
+                            <defs>
+                                <linearGradient id="speedGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stop-color="rgba(59, 130, 246, 0.3)"/>
+                                    <stop offset="100%" stop-color="#3b82f6"/>
+                                </linearGradient>
+                            </defs>
+                            <!-- Background Circle -->
+                            <circle cx="100" cy="100" r="85" fill="none" stroke="rgba(85, 85, 85, 0.2)" stroke-width="12" stroke-linecap="round" stroke-dasharray="400 400" transform="rotate(-90 100 100)"/>
+                            <!-- Progress Circle -->
+                            <circle id="speedProgress" cx="100" cy="100" r="85" fill="none" stroke="url(#speedGradient)" stroke-width="12" stroke-linecap="round" stroke-dasharray="400 400" stroke-dashoffset="400" transform="rotate(-90 100 100)"/>
+                            <!-- Center Text -->
+                            <text x="100" y="85" text-anchor="middle" dominant-baseline="middle" fill="currentColor" font-size="32" font-weight="700" id="speedValue">0</text>
+                            <text x="100" y="105" text-anchor="middle" dominant-baseline="middle" fill="currentColor" font-size="12">km/h</text>
+                            <text x="100" y="125" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="400" class="gauge-label">SPEED</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Status Bar -->
+        <div class="status-bar">
+            <div class="status-left">
+                <div class="status-indicator online">
+                    <div class="status-dot"></div>
+                    <span>Engine Running</span>
+                </div>
+                <div class="status-indicator normal">
+                    <div class="status-dot"></div>
+                    <span>All Systems Normal</span>
+                </div>
+            </div>
+            <div class="status-right">
+                Vehicle ID: VH-2024-001
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/dashboard.js"></script>
+</body>
+</html>

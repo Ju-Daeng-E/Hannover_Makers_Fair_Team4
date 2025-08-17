@@ -178,10 +178,7 @@ class CameraStreamer:
                 frame = cv2.flip(frame, 0)  # 0 = flip vertically (upside down fix)
                 # Fix horizontal flip (left-right mirror)
                 frame = cv2.flip(frame, 1)  # 1 = flip horizontally (left-right mirror fix)
-                
-                # PiCamera2 outputs RGB format which is correct for web streaming
-                # No color conversion needed - keep RGB format
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # This was causing red/blue swap
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
                 
                 return frame
                 
@@ -286,19 +283,28 @@ class CameraStreamer:
             text-align: center;
         }
         .container {
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
         .video-wrapper {
             position: relative;
             margin: 20px 0;
-            display: inline-block;
+            display: flex;
+            justify-content: center;
+            width: 100%;
         }
         .video-container {
             border: 2px solid #333;
             border-radius: 10px;
             overflow: hidden;
             background: #000;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            justify-content: center;
         }
         .video-container.fullscreen {
             border: none;
@@ -315,6 +321,8 @@ class CameraStreamer:
             max-width: 100%;
             height: auto;
             display: block;
+            margin: 0 auto;
+            border-radius: 8px;
         }
         .fullscreen img {
             width: 100vw;
