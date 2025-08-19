@@ -23,6 +23,11 @@ class VehicleDashboard {
         this.updateInterval = null;
         this.animationInterval = null;
         
+        // WebSocket 비디오 스트리밍
+        this.websocket = null;
+        this.websocketPort = 8765;
+        this.videoConnected = false;
+        
         this.init();
     }
     
@@ -31,6 +36,7 @@ class VehicleDashboard {
         this.startClockTimer();
         this.startDataFetching();
         this.startAnimationLoop();
+        this.initVideoStream();
         
         // Wait a bit before showing animations
         setTimeout(() => {
@@ -144,7 +150,7 @@ class VehicleDashboard {
     startAnimationLoop() {
         this.animationInterval = setInterval(() => {
             this.animateValues();
-        }, 16); // ~60 FPS
+        }, 33); // ~30 FPS (reduced from 60 FPS)
     }
     
     animateValues() {
@@ -228,8 +234,8 @@ class VehicleDashboard {
             speedValueElement.textContent = this.animatedValues.speed.toFixed(1);
         }
         
-        // Debug logging
-        if (window.DEBUG_GAUGES || true) { // Force debug for now
+        // Debug logging (only when enabled)
+        if (window.DEBUG_GAUGES) {
             console.log('🎛️ Gauge Update:', {
                 rpm: this.animatedValues.rpm,
                 rpmPercent: (rpmPercent * 100).toFixed(1) + '%',
@@ -268,87 +274,123 @@ class VehicleDashboard {
     }
 }
 
-// Camera management
-class CameraManager {
-    constructor() {
-        this.cameraImg = document.getElementById('cameraStream');
-        this.retryCount = 0;
-        this.maxRetries = 5;
-        this.retryDelay = 2000;
+// WebSocket 비디오 스트림 메서드들을 VehicleDashboard 클래스에 추가
+VehicleDashboard.prototype.initVideoStream = function() {
+    console.log('🎥 WebSocket 비디오 스트림 초기화...');
+    this.websocketPort = 8765;
+    this.videoConnected = false;
+    this.firstFrameReceived = false;
+    this.connectVideoWebSocket();
+    this.startKeepAliveTimer();
+};
+
+VehicleDashboard.prototype.connectVideoWebSocket = function() {
+    try {
+        const host = window.location.hostname;
+        const wsUrl = `ws://${host}:${this.websocketPort}`;
+        console.log(`🔌 WebSocket 연결 시도: ${wsUrl}`);
         
-        this.init();
-    }
-    
-    init() {
-        // Try to load camera stream
-        this.loadCameraStream();
+        this.websocket = new WebSocket(wsUrl);
         
-        // Set up error handling
-        this.cameraImg.addEventListener('error', () => {
-            this.handleCameraError();
-        });
+        this.websocket.onopen = (event) => {
+            console.log('✅ WebSocket 비디오 연결 성공');
+            this.videoConnected = true;
+            this.updateVideoStatus('연결됨');
+        };
         
-        this.cameraImg.addEventListener('load', () => {
-            this.handleCameraSuccess();
-        });
+        this.websocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleVideoMessage(data);
+            } catch (error) {
+                console.error('❌ WebSocket 메시지 파싱 오류:', error);
+            }
+        };
         
-        // Periodically check camera status
-        setInterval(() => {
-            this.checkCameraStatus();
-        }, 10000); // Check every 10 seconds
-    }
-    
-    loadCameraStream() {
-        // Add timestamp to prevent caching
-        const timestamp = new Date().getTime();
-        this.cameraImg.src = `/video_feed?t=${timestamp}`;
-    }
-    
-    handleCameraSuccess() {
-        console.log('Camera stream loaded successfully');
-        this.retryCount = 0; // Reset retry count on success
-    }
-    
-    handleCameraError() {
-        console.warn('Camera stream error, attempting retry...');
-        this.retryCount++;
+        this.websocket.onerror = (error) => {
+            console.error('❌ WebSocket 오류:', error);
+            this.videoConnected = false;
+            this.updateVideoStatus('오류');
+        };
         
-        if (this.retryCount <= this.maxRetries) {
+        this.websocket.onclose = (event) => {
+            console.log('🔌 WebSocket 연결 종료:', event.code, event.reason);
+            this.videoConnected = false;
+            this.updateVideoStatus('연결 끊김');
+            
+            // 3초 후 재연결 시도
             setTimeout(() => {
-                this.loadCameraStream();
-            }, this.retryDelay);
-        } else {
-            console.error('Camera stream failed after maximum retries');
-            this.showCameraError();
-        }
-    }
-    
-    showCameraError() {
-        const cameraView = document.getElementById('cameraView');
-        cameraView.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #1e293b; color: #94a3b8; font-size: 1.2rem;">
-                <div style="text-align: center;">
-                    <div style="font-size: 3rem; margin-bottom: 1rem;">📹</div>
-                    <div>Camera Unavailable</div>
-                    <div style="font-size: 0.9rem; margin-top: 0.5rem;">Retrying connection...</div>
-                </div>
-            </div>
-        `;
+                if (!this.videoConnected) {
+                    console.log('🔄 WebSocket 재연결 시도...');
+                    this.connectVideoWebSocket();
+                }
+            }, 3000);
+        };
         
-        // Reset retry count and try again after a longer delay
-        setTimeout(() => {
-            this.retryCount = 0;
-            this.loadCameraStream();
-        }, 5000);
+    } catch (error) {
+        console.error('❌ WebSocket 연결 실패:', error);
+        this.updateVideoStatus('연결 실패');
     }
-    
-    checkCameraStatus() {
-        // Try to reload if needed
-        if (this.retryCount > 0 && this.retryCount <= this.maxRetries) {
-            this.loadCameraStream();
+};
+
+VehicleDashboard.prototype.handleVideoMessage = function(data) {
+    switch (data.type) {
+        case 'connection':
+            console.log('📡 연결 상태:', data.status, data.message);
+            if (data.status === 'connected') {
+                this.updateVideoStatus('스트림 준비');
+            }
+            break;
+            
+        case 'video_frame':
+            // Base64 이미지 데이터를 카메라 스트림에 표시
+            this.updateCameraFrame(data.data);
+            break;
+            
+        case 'pong':
+            // Keep-alive 응답
+            break;
+            
+        default:
+            console.log('📡 알 수 없는 메시지 타입:', data.type);
+    }
+};
+
+VehicleDashboard.prototype.updateCameraFrame = function(imageData) {
+    const cameraStream = document.getElementById('cameraStream');
+    if (cameraStream) {
+        cameraStream.src = imageData;
+        cameraStream.style.display = 'block';
+        
+        // 처음 프레임 수신 시 상태 업데이트
+        if (!this.firstFrameReceived) {
+            this.firstFrameReceived = true;
+            this.updateVideoStatus('스트리밍 중');
+            console.log('✅ 첫 번째 비디오 프레임 수신');
         }
     }
-}
+};
+
+VehicleDashboard.prototype.updateVideoStatus = function(status) {
+    // 비디오 상태를 UI에 표시 (필요시 추가 구현)
+    console.log(`📹 비디오 상태: ${status}`);
+};
+
+VehicleDashboard.prototype.sendKeepAlive = function() {
+    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        this.websocket.send(JSON.stringify({
+            type: 'ping',
+            timestamp: Date.now()
+        }));
+    }
+};
+
+// Keep-alive 타이머 (30초마다)
+VehicleDashboard.prototype.startKeepAliveTimer = function() {
+    setInterval(() => {
+        this.sendKeepAlive();
+    }, 30000);
+};
 
 // Initialize dashboard when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
@@ -360,8 +402,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Make dashboard globally accessible for debugging
     window.dashboard = dashboard;
     
-    // Initialize camera
-    const cameraManager = new CameraManager();
+    // WebSocket video is now integrated into the dashboard class
     
     // Handle page visibility for performance
     document.addEventListener('visibilitychange', () => {
@@ -387,7 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('✅ Vehicle Dashboard Initialized');
     
     // Enable debug mode for gauges
-    window.DEBUG_GAUGES = true;
+    window.DEBUG_GAUGES = false;
     
     // Add manual test function for gauges
     window.testGauges = function(rpm = 1000, speed = 10) {

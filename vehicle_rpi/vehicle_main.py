@@ -86,8 +86,10 @@ class MockVehicle:
 class CameraStreamer:
     """Camera streaming handler with proper integration"""
     
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8080, udp_mode: bool = False, udp_port: int = 9999):
         self.port = port
+        self.udp_mode = udp_mode
+        self.udp_port = udp_port
         self.streaming = False
         self.process = None
         
@@ -123,14 +125,18 @@ class CameraStreamer:
                 # Make script executable
                 os.chmod(camera_script, 0o755)
                 
-                # Use the shell script wrapper that uses system Python
-                self.process = subprocess.Popen([
-                    'bash', camera_script,
-                    '--port', str(self.port)
-                ], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # Build command arguments
+                args = ['bash', camera_script]
+                if self.udp_mode:
+                    args.extend(['--udp', '--udp-port', str(self.udp_port)])
+                else:
+                    args.extend(['--port', str(self.port)])
+                
+                # Use the shell script wrapper
+                self.process = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
                 # Give it time to start and check if it's running
-                time.sleep(3)
+                time.sleep(1)  # Reduced startup delay
                 if self.process.poll() is None:  # Process is still running
                     self.streaming = True
                     print(f"✅ Camera streaming started on port {self.port}")
@@ -142,16 +148,20 @@ class CameraStreamer:
                         print(f"Error: {stderr.decode()}")
                     self.streaming = False
             else:
-                # Try direct system python call
+                # Try direct system python call with LOW PRIORITY
                 camera_py = os.path.join(script_dir, "camera_stream.py")
                 if os.path.exists(camera_py):
-                    self.process = subprocess.Popen([
-                        '/usr/bin/python3', camera_py,
-                        '--port', str(self.port)
-                    ], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    # Build command arguments
+                    args = ['/usr/bin/python3', camera_py]
+                    if self.udp_mode:
+                        args.extend(['--udp', '--udp-port', str(self.udp_port)])
+                    else:
+                        args.extend(['--port', str(self.port)])
+                    
+                    self.process = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     
                     # Give it time to start and check if it's running
-                    time.sleep(3)
+                    time.sleep(1)  # Reduced startup delay
                     if self.process.poll() is None:  # Process is still running
                         self.streaming = True
                         print(f"✅ Camera streaming started with system Python on port {self.port}")
@@ -284,7 +294,7 @@ class WebServer:
                 
                 # 데이터 유효성 확인
                 data_age = speed_data.get('age_seconds', 999)
-                is_fresh = data_age < 5.0  # 5초 이내 데이터만 신뢰
+                is_fresh = data_age < 1.0  # 1초 이내 데이터만 신뢰 (실시간성 개선)
                 print(f"🔍 API Debug - data_age: {data_age}, is_fresh: {is_fresh}")
                 
                 if is_fresh:
@@ -328,42 +338,8 @@ class WebServer:
                 }
             return jsonify(data)
         
-        @self.app.route('/video_feed')
-        def video_feed():
-            """카메라 피드 (프록시)"""
-            try:
-                import requests
-                # Proxy camera stream from camera server
-                camera_url = f'http://localhost:{self.vehicle_system.camera_port}/video_feed'
-                
-                def generate():
-                    try:
-                        response = requests.get(camera_url, stream=True, timeout=5)
-                        if response.status_code == 200:
-                            for chunk in response.iter_content(chunk_size=1024):
-                                if chunk:
-                                    yield chunk
-                        else:
-                            # Return error frame
-                            yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                            yield self.get_error_frame()
-                            yield b'\r\n'
-                    except Exception as e:
-                        print(f"Camera proxy error: {e}")
-                        # Return error frame
-                        yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                        yield self.get_error_frame()
-                        yield b'\r\n'
-                
-                return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-                
-            except ImportError:
-                # If requests is not available, redirect to camera port
-                from flask import redirect
-                return redirect(f'http://localhost:{self.vehicle_system.camera_port}/video_feed')
-            except Exception as e:
-                print(f"Video feed error: {e}")
-                return f"Camera feed unavailable: {e}", 503
+        # Video feed now handled directly via SSE on port 8080
+        # Proxy removed to eliminate latency
         
         @self.app.route('/status')
         def status():
@@ -376,31 +352,7 @@ class WebServer:
                 'dashboard': 'react'
             })
     
-    def get_error_frame(self):
-        """Generate error frame for camera feed"""
-        try:
-            import cv2
-            import numpy as np
-            
-            # Create a simple error frame
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            frame.fill(30)  # Dark gray background
-            
-            # Add error message
-            cv2.putText(frame, "Camera Unavailable", (150, 220), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (128, 128, 128), 2)
-            cv2.putText(frame, "Checking connection...", (180, 260), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 1)
-            
-            # Encode as JPEG
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if ret:
-                return buffer.tobytes()
-        except Exception:
-            pass
-        
-        # Fallback: return minimal JPEG header
-        return b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342\xff\xc0\x00\x11\x08\x01\xe0\x02\x80\x03\x01"\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\xff\xc4\x00\x14\x10\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00\xff\xd9'
+    # get_error_frame method removed - no longer needed with direct SSE connection
     
     def start(self):
         """Start web server in separate thread"""
@@ -436,10 +388,14 @@ class WebServer:
 class VehicleSystem:
     """Main vehicle system"""
     
-    def __init__(self, listen_port: int = 8888, camera_port: int = 8080, web_port: int = 8082):
+    def __init__(self, listen_port: int = 8888, camera_port: int = 8080, web_port: int = 8082, 
+                 udp_streaming: bool = False, udp_port: int = 9999, websocket_port: int = 8765):
         self.listen_port = listen_port
         self.camera_port = camera_port
         self.web_port = web_port
+        self.udp_streaming = udp_streaming
+        self.udp_port = udp_port
+        self.websocket_port = websocket_port
         self.server_socket = None
         self.client_socket = None
         self.running = False
@@ -489,8 +445,17 @@ class VehicleSystem:
         else:
             self.vehicle = MockVehicle()
         
-        # Initialize camera streaming
-        self.camera_streamer = CameraStreamer(camera_port)
+        # Initialize camera streaming 
+        self.camera_streamer = CameraStreamer(
+            port=camera_port, 
+            udp_mode=udp_streaming, 
+            udp_port=udp_port
+        )
+        
+        # Initialize WebSocket bridge for UDP streaming
+        self.websocket_bridge = None
+        if udp_streaming:
+            self.setup_websocket_bridge()
         
         # Initialize dashboard
         self.dashboard = Dashboard()
@@ -534,6 +499,31 @@ class VehicleSystem:
             'M7': 0.7,   # Manual 7 - 100% max
             'M8': 0.8,   # Manual 8 - 100% max
         }
+    
+    def setup_websocket_bridge(self):
+        """WebSocket 브릿지 설정 (UDP 모드에서만)"""
+        try:
+            import sys
+            import os
+            
+            # 현재 디렉토리를 sys.path에 추가
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            if current_dir not in sys.path:
+                sys.path.insert(0, current_dir)
+            
+            from udp_websocket_bridge import UDPWebSocketBridge
+            self.websocket_bridge = UDPWebSocketBridge(
+                udp_port=self.udp_port,
+                websocket_port=self.websocket_port
+            )
+            self.logger.info(f"✅ WebSocket 브릿지 준비: UDP {self.udp_port} → WebSocket {self.websocket_port}")
+        except ImportError as e:
+            self.logger.warning(f"⚠️ udp_websocket_bridge 모듈을 찾을 수 없습니다: {e}")
+            self.logger.info(f"🔧 수동 실행: ./run_websocket_bridge.sh {self.udp_port} {self.websocket_port}")
+            self.websocket_bridge = None
+        except Exception as e:
+            self.logger.error(f"❌ WebSocket 브릿지 설정 오류: {e}")
+            self.websocket_bridge = None
     
     def setup_server(self) -> bool:
         """Setup server socket to listen for controller"""
@@ -682,15 +672,77 @@ class VehicleSystem:
             self.vehicle.set_steering_percent(0.0)
     
     def update_speed_data(self):
-        """Update speed sensor data in separate thread"""
+        """Update speed sensor data in separate HIGH PRIORITY thread"""
+        # Skip priority changes for system stability
+        
         while self.running:
             try:
                 if self.speed_sensor:
                     self.current_speed_data = self.speed_sensor.get_speed_data()
-                time.sleep(0.01)  # 10Hz update rate
+                time.sleep(0.02)  # 50Hz update rate (2x faster)
             except Exception as e:
                 self.logger.error(f"❌ Speed sensor update error: {e}")
                 time.sleep(1)  # Wait before retry
+    
+    def start_websocket_bridge_with_delay(self):
+        """UDP 서버 준비 후 WebSocket 브릿지 시작"""
+        # UDP 서버가 완전히 시작될 때까지 대기
+        self.logger.info("⏳ UDP 서버 시작 대기 중...")
+        time.sleep(3)  # 3초 대기
+        
+        # UDP 서버 연결 상태 확인 (최대 10회 시도)
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            try:
+                import socket
+                test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                test_socket.settimeout(1.0)
+                
+                # UDP 서버에 테스트 연결
+                test_socket.sendto(b'PING', ('localhost', self.udp_port))
+                test_socket.close()
+                
+                self.logger.info(f"✅ UDP 서버 준비 완료 (시도 {attempt + 1}/{max_attempts})")
+                break
+                
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    self.logger.info(f"⏳ UDP 서버 대기 중... (시도 {attempt + 1}/{max_attempts})")
+                    time.sleep(2)
+                else:
+                    self.logger.warning(f"⚠️ UDP 서버 확인 실패, 브릿지를 시작합니다: {e}")
+                    break
+        
+        # WebSocket 브릿지 시작
+        self.start_websocket_bridge_async()
+    
+    def start_websocket_bridge_async(self):
+        """WebSocket 브릿지를 비동기로 시작"""
+        import asyncio
+        
+        try:
+            self.logger.info(f"🚀 WebSocket 브릿지 시작: ws://[ip]:{self.websocket_port}")
+            
+            # 새로운 이벤트 루프 생성 (스레드에서 실행)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # WebSocket 브릿지 시작
+            loop.run_until_complete(
+                self.websocket_bridge.start_bridge('localhost')
+            )
+        except ImportError as e:
+            self.logger.error(f"❌ WebSocket 브릿지 모듈 오류: {e}")
+            self.logger.info(f"🔧 websockets 라이브러리 설치: pip install websockets")
+            self.logger.info(f"🔧 수동 실행: ./run_websocket_bridge.sh {self.udp_port} {self.websocket_port}")
+        except Exception as e:
+            self.logger.error(f"❌ WebSocket 브릿지 오류: {e}")
+            self.logger.info(f"🔧 수동 실행 시도: ./run_websocket_bridge.sh {self.udp_port} {self.websocket_port}")
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
 
     def run_dashboard(self):
         """Run dashboard in separate thread"""
@@ -715,6 +767,20 @@ class VehicleSystem:
         
         # Start camera streaming
         self.camera_streamer.start_streaming()
+        
+        # Start WebSocket bridge for UDP streaming (비동기 실행)
+        if self.udp_streaming and self.websocket_bridge:
+            bridge_thread = threading.Thread(
+                target=self.start_websocket_bridge_with_delay, 
+                daemon=True
+            )
+            bridge_thread.start()
+            self.logger.info(f"🌉 WebSocket 브릿지가 UDP 서버 준비를 기다리는 중...")
+            self.logger.info(f"📡 브라우저 접속: http://[ip]:{self.web_port} (브릿지 준비 후 비디오 시작)")
+        else:
+            if self.udp_streaming and not self.websocket_bridge:
+                self.logger.warning("⚠️ WebSocket 브릿지를 초기화할 수 없습니다")
+                self.logger.info(f"🔧 수동 실행: ./run_websocket_bridge.sh {self.udp_port} {self.websocket_port}")
         
         # Start web server for React dashboard
         if self.web_server:
@@ -794,6 +860,18 @@ class VehicleSystem:
         # Stop camera streaming
         self.camera_streamer.stop_streaming()
         
+        # Stop WebSocket bridge
+        if self.websocket_bridge:
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.websocket_bridge.stop_bridge())
+                loop.close()
+                self.logger.info("🛑 WebSocket 브릿지 중지")
+            except Exception as e:
+                self.logger.warning(f"⚠️ WebSocket 브릿지 중지 오류: {e}")
+        
         # Stop web server
         if self.web_server:
             self.web_server.stop()
@@ -809,15 +887,44 @@ class VehicleSystem:
 
 def main():
     """Main entry point"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='RC Car Vehicle System')
+    parser.add_argument('--listen-port', type=int, default=8888, help='Controller listen port (default: 8888)')
+    parser.add_argument('--camera-port', type=int, default=8080, help='HTTP camera port (default: 8080)')
+    parser.add_argument('--web-port', type=int, default=8082, help='Web dashboard port (default: 8082)')
+    parser.add_argument('--udp-streaming', action='store_true', help='Use UDP video streaming')
+    parser.add_argument('--udp-port', type=int, default=9999, help='UDP streaming port (default: 9999)')
+    parser.add_argument('--websocket-port', type=int, default=8765, help='WebSocket bridge port (default: 8765)')
+    
+    args = parser.parse_args()
+    
     print("🚗 RC Car Vehicle System")
     print("=" * 40)
+    print(f"🎮 Controller port: {args.listen_port}")
+    print(f"🌐 Web dashboard: {args.web_port}")
     
-    # Configuration
-    LISTEN_PORT = 8888      # Port to listen for controller (changed to avoid conflict)
-    CAMERA_PORT = 8080      # Port for camera streaming (changed to avoid conflict)
-    WEB_PORT = 8082         # Port for web dashboard (changed to avoid conflict)
+    if args.udp_streaming:
+        print(f"🚀 UDP video streaming: {args.udp_port}")
+        print(f"🌐 WebSocket bridge: {args.websocket_port}")
+        print("📡 브라우저 접속:")
+        print(f"  http://[vehicle-ip]:{args.web_port} (UDP 스트림 통합)")
+        print("🔧 Direct UDP 클라이언트:")
+        print(f"  python3 udp_client.py --host [vehicle-ip] --port {args.udp_port}")
+    else:
+        print(f"📹 HTTP video streaming: {args.camera_port}")
+        print(f"🌐 브라우저 접속: http://[vehicle-ip]:{args.camera_port}")
     
-    vehicle = VehicleSystem(LISTEN_PORT, CAMERA_PORT, WEB_PORT)
+    print("=" * 40)
+    
+    vehicle = VehicleSystem(
+        listen_port=args.listen_port,
+        camera_port=args.camera_port, 
+        web_port=args.web_port,
+        udp_streaming=args.udp_streaming,
+        udp_port=args.udp_port,
+        websocket_port=args.websocket_port
+    )
     vehicle.run()
 
 if __name__ == "__main__":

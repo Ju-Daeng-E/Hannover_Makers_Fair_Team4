@@ -39,6 +39,18 @@ fi
 
 # Check Python dependencies
 print_status "Checking Python dependencies..."
+
+# Check for websockets library (needed for UDP streaming)
+if ! python3 -c "import websockets" 2>/dev/null; then
+    print_status "Installing websockets library for UDP streaming..."
+    python3 -m pip install --user --break-system-packages websockets 2>/dev/null || {
+        print_error "Failed to install websockets library"
+        print_warning "UDP video streaming may not work properly"
+    }
+else
+    print_status "websockets library found"
+fi
+
 if [ -f "requirements.txt" ]; then
     # Check if we need to handle numpy compatibility
     if python3 -c "import simplejpeg" 2>/dev/null; then
@@ -168,8 +180,8 @@ if [ "$1" = "--camera-speed" ]; then
     print_status "Starting camera streaming with speed sensor..."
     /usr/bin/python3 camera_stream.py --port 8080
 else
-    # Start vehicle main program (which includes camera streaming)
-    /usr/bin/python3 vehicle_main.py
+    # Start vehicle main program with UDP streaming mode
+    /usr/bin/python3 vehicle_main.py --udp-streaming
 fi
 
 # Cleanup on exit

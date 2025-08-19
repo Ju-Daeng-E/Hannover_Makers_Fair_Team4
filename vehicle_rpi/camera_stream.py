@@ -8,6 +8,7 @@ import os
 import time
 import threading
 import logging
+import base64
 from datetime import datetime
 from flask import Flask, Response, render_template_string
 from speed_sensor import SpeedSensor
@@ -30,7 +31,8 @@ class CameraStreamer:
     """Camera streaming handler with multiple camera support"""
     
     def __init__(self, port: int = 8080, width: int = 800, height: int = 600, fps: int = 30, 
-                 enable_speed_sensor: bool = True, speed_gpio_pin: int = 16):
+                 enable_speed_sensor: bool = True, speed_gpio_pin: int = 16, 
+                 udp_mode: bool = False, udp_port: int = 9999):
         self.port = port
         self.width = width
         self.height = height
@@ -40,6 +42,11 @@ class CameraStreamer:
         self.streaming = False
         self.frame = None
         self.lock = threading.Lock()
+        
+        # UDP mode
+        self.udp_mode = udp_mode
+        self.udp_port = udp_port
+        self.udp_streamer = None
         
         # Speed sensor
         self.enable_speed_sensor = enable_speed_sensor
@@ -56,9 +63,14 @@ class CameraStreamer:
         # Initialize camera
         self.setup_camera()
         
-        # Flask app for streaming
-        self.app = Flask(__name__)
-        self.setup_routes()
+        # Initialize streaming method
+        if not self.udp_mode:
+            # Flask app for HTTP streaming
+            self.app = Flask(__name__)
+            self.setup_routes()
+        else:
+            # UDP streaming setup
+            self.setup_udp_streaming()
     
     def setup_speed_sensor(self, gpio_pin: int):
         """Setup speed sensor for RPM and speed monitoring"""
@@ -208,16 +220,18 @@ class CameraStreamer:
                 # Convert RGB to BGR only for JPEG encoding (OpenCV expects BGR)
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
-                # Encode frame as JPEG with optimized settings for low latency
+                # Encode frame as JPEG with ultra-low latency settings
                 ret, buffer = cv2.imencode('.jpg', frame_bgr, [
-                    cv2.IMWRITE_JPEG_QUALITY, 75,  # Good quality but not too high
-                    cv2.IMWRITE_JPEG_OPTIMIZE, 1,
+                    cv2.IMWRITE_JPEG_QUALITY, 40,  # Much lower quality for maximum speed
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 0,  # Disable optimization for speed
+                    cv2.IMWRITE_JPEG_PROGRESSIVE, 0,  # Disable progressive encoding
+                    cv2.IMWRITE_JPEG_RST_INTERVAL, 0,  # No restart markers
                 ])
                 if ret:
                     with self.lock:
                         self.frame = buffer.tobytes()
                 
-            time.sleep(1.0 / self.fps)  # Control frame rate
+            time.sleep(0.016)  # 60fps target for lower latency
     
     def add_overlay(self, frame):
         """Add overlay information to frame"""
@@ -259,6 +273,20 @@ class CameraStreamer:
             self.logger.warning(f"⚠️ Overlay error: {e}")
         
         return frame
+    
+    def setup_udp_streaming(self):
+        """UDP 스트리밍 설정"""
+        try:
+            from udp_streamer import UDPVideoStreamer
+            self.udp_streamer = UDPVideoStreamer(
+                port=self.udp_port,
+                quality=40,  # 고속 전송을 위한 낮은 품질
+                max_fps=60   # 높은 프레임율
+            )
+            self.logger.info(f"✅ UDP 스트리밍 준비: 포트 {self.udp_port}")
+        except ImportError:
+            self.logger.error("❌ udp_streamer 모듈을 찾을 수 없습니다")
+            self.udp_streamer = None
     
     def setup_routes(self):
         """Setup Flask routes"""
@@ -552,6 +580,24 @@ class CameraStreamer:
                 mimetype='multipart/x-mixed-replace; boundary=frame'
             )
         
+        @self.app.route('/video_stream_sse')
+        def video_stream_sse():
+            """Server-Sent Events video streaming"""
+            def generate_sse():
+                while self.streaming:
+                    with self.lock:
+                        if self.frame is not None:
+                            # Convert frame to base64
+                            frame_b64 = base64.b64encode(self.frame).decode('utf-8')
+                            # Send as SSE event
+                            yield f"data: data:image/jpeg;base64,{frame_b64}\n\n"
+                    time.sleep(0.033)  # ~30fps
+            
+            response = Response(generate_sse(), mimetype='text/event-stream')
+            response.headers['Cache-Control'] = 'no-cache'
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
+        
         @self.app.route('/status')
         def status():
             """Status endpoint"""
@@ -570,7 +616,7 @@ class CameraStreamer:
                 if self.frame is not None:
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + self.frame + b'\r\n')
-            time.sleep(0.01)  # Very low latency
+            time.sleep(0.001)  # Minimal sleep to prevent 100% CPU usage
     
     def start_streaming(self):
         """Start camera streaming"""
@@ -587,23 +633,42 @@ class CameraStreamer:
         
         self.streaming = True
         
-        # Start frame capture thread
-        self.capture_thread = threading.Thread(target=self.frame_generator, daemon=True)
-        self.capture_thread.start()
-        
-        # Start Flask server
-        try:
-            self.logger.info(f"🚀 Starting camera stream on port {self.port}")
-            self.app.run(host='0.0.0.0', port=self.port, debug=False, 
-                        threaded=True, use_reloader=False)
-        except Exception as e:
-            self.logger.error(f"❌ Flask server error: {e}")
-            self.streaming = False
-            return False
+        if self.udp_mode:
+            # UDP 스트리밍 모드
+            if self.udp_streamer:
+                try:
+                    self.logger.info(f"🚀 Starting UDP camera stream on port {self.udp_port}")
+                    self.udp_streamer.start_streaming(self)
+                except Exception as e:
+                    self.logger.error(f"❌ UDP streaming error: {e}")
+                    self.streaming = False
+                    return False
+            else:
+                self.logger.error("❌ UDP streamer not available")
+                return False
+        else:
+            # HTTP/Flask 스트리밍 모드
+            # Start frame capture thread
+            self.capture_thread = threading.Thread(target=self.frame_generator, daemon=True)
+            self.capture_thread.start()
+            
+            # Start Flask server
+            try:
+                self.logger.info(f"🚀 Starting HTTP camera stream on port {self.port}")
+                self.app.run(host='0.0.0.0', port=self.port, debug=False, 
+                            threaded=True, use_reloader=False)
+            except Exception as e:
+                self.logger.error(f"❌ Flask server error: {e}")
+                self.streaming = False
+                return False
     
     def stop_streaming(self):
         """Stop camera streaming"""
         self.streaming = False
+        
+        # Stop UDP streamer if active
+        if self.udp_mode and self.udp_streamer:
+            self.udp_streamer.stop_streaming()
         
         # Stop speed sensor
         if self.speed_sensor:
@@ -624,22 +689,36 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='RC Car Camera Streaming Server')
-    parser.add_argument('--port', type=int, default=8080, help='Streaming port (default: 8080)')
+    parser.add_argument('--port', type=int, default=8080, help='HTTP streaming port (default: 8080)')
     parser.add_argument('--width', type=int, default=800, help='Frame width (default: 800)')
     parser.add_argument('--height', type=int, default=600, help='Frame height (default: 600)')
     parser.add_argument('--fps', type=int, default=30, help='Frame rate (default: 30)')
     parser.add_argument('--no-speed', action='store_true', help='Disable speed sensor')
     parser.add_argument('--speed-gpio', type=int, default=16, help='Speed sensor GPIO pin (default: 16)')
     parser.add_argument('--speed-sim', action='store_true', help='Use speed simulation mode')
+    parser.add_argument('--udp', action='store_true', help='Use UDP streaming instead of HTTP')
+    parser.add_argument('--udp-port', type=int, default=9999, help='UDP streaming port (default: 9999)')
     
     args = parser.parse_args()
     
-    print("📹 RC Car Camera Streaming Server")
-    print("=" * 40)
-    print(f"🌐 Starting server on http://0.0.0.0:{args.port}")
-    print(f"📱 Mobile access: http://[vehicle-ip]:{args.port}")
-    print("🔗 Direct stream: http://[vehicle-ip]:{args.port}/video_feed")
-    print(f"🏎️ Speed sensor: {'Disabled' if args.no_speed else f'GPIO {args.speed_gpio}'}")
+    if args.udp:
+        print("🚀 RC Car UDP Camera Streaming Server")
+        print("=" * 40)
+        print(f"🌐 UDP 포트: {args.udp_port}")
+        print(f"📹 해상도: {args.width}x{args.height} @ {args.fps}fps")
+        print(f"🏎️ Speed sensor: {'Disabled' if args.no_speed else f'GPIO {args.speed_gpio}'}")
+        print("📡 클라이언트 연결 방법:")
+        print(f"  1. UDP 소켓으로 [vehicle-ip]:{args.udp_port} 연결")
+        print(f"  2. b'CONNECT' 메시지 전송")
+        print(f"  3. 비디오 스트림 수신 시작")
+    else:
+        print("📹 RC Car HTTP Camera Streaming Server")
+        print("=" * 40)
+        print(f"🌐 Starting server on http://0.0.0.0:{args.port}")
+        print(f"📱 Mobile access: http://[vehicle-ip]:{args.port}")
+        print("🔗 Direct stream: http://[vehicle-ip]:{args.port}/video_feed")
+        print(f"🏎️ Speed sensor: {'Disabled' if args.no_speed else f'GPIO {args.speed_gpio}'}")
+    
     print("=" * 40)
     
     streamer = CameraStreamer(
@@ -648,7 +727,9 @@ def main():
         height=args.height, 
         fps=args.fps,
         enable_speed_sensor=not args.no_speed,
-        speed_gpio_pin=args.speed_gpio
+        speed_gpio_pin=args.speed_gpio,
+        udp_mode=args.udp,
+        udp_port=args.udp_port
     )
     
     try:
