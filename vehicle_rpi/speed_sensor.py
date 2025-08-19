@@ -78,6 +78,7 @@ class SpeedSensor:
             self.last_state = GPIO.input(self.gpio_pin)
             
             self.logger.info(f"✅ Speed sensor initialized on GPIO {self.gpio_pin} (polling mode)")
+            self.logger.info(f"🔍 Initial GPIO{self.gpio_pin} state: {self.last_state}")
             return True
             
         except Exception as e:
@@ -166,7 +167,12 @@ class SpeedSensor:
                     self.last_update = time.time()
                 
                 # Log the values (changed to INFO level for debugging)
-                self.logger.info(f"[SPEED] Pulses: {pulse_count}, RPM: {self.current_rpm}, Speed: {self.current_speed_kmh:.2f} km/h")
+                if pulse_count > 0:
+                    self.logger.info(f"[SPEED] Pulses: {pulse_count}, RPM: {self.current_rpm}, Speed: {self.current_speed_kmh:.2f} km/h")
+                else:
+                    # Log no pulse detection every 5 seconds for debugging
+                    if int(time.time()) % 5 == 0:
+                        self.logger.info(f"[SPEED] No pulses detected - GPIO{self.gpio_pin} state check")
     
     def get_speed_data(self):
         """Get current speed data as dictionary"""

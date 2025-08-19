@@ -356,8 +356,12 @@ class WebServer:
     
     def start(self):
         """Start web server in separate thread"""
-        if not FLASK_AVAILABLE or not self.app:
+        if not FLASK_AVAILABLE:
             print("⚠️ Web server unavailable - Flask not installed")
+            return False
+        
+        if not self.app:
+            print("⚠️ Web server unavailable - Flask app not initialized")
             return False
         
         try:
@@ -461,7 +465,12 @@ class VehicleSystem:
         self.dashboard = Dashboard()
         
         # Initialize web server for React dashboard
-        self.web_server = WebServer(self.web_port, self)
+        if FLASK_AVAILABLE:
+            self.web_server = WebServer(self.web_port, self)
+            self.logger.info(f"🌐 Web server initialized for port {self.web_port}")
+        else:
+            self.web_server = None
+            self.logger.warning("⚠️ Flask not available - web server disabled")
         
         # Initialize speed sensor
         try:
@@ -675,14 +684,20 @@ class VehicleSystem:
         """Update speed sensor data in separate HIGH PRIORITY thread"""
         # Skip priority changes for system stability
         
+        self.logger.info("🔄 Speed data update thread started")
         while self.running:
             try:
                 if self.speed_sensor:
-                    self.current_speed_data = self.speed_sensor.get_speed_data()
+                    new_data = self.speed_sensor.get_speed_data()
+                    self.current_speed_data = new_data
+                    # Debug log every 5 seconds
+                    if int(time.time()) % 5 == 0:
+                        self.logger.info(f"🔄 Speed data updated: RPM={new_data.get('rpm', 0)}, Speed={new_data.get('speed_kmh', 0.0):.1f}km/h")
                 time.sleep(0.02)  # 50Hz update rate (2x faster)
             except Exception as e:
                 self.logger.error(f"❌ Speed sensor update error: {e}")
                 time.sleep(1)  # Wait before retry
+        self.logger.info("🛑 Speed data update thread stopped")
     
     def start_websocket_bridge_with_delay(self):
         """UDP 서버 준비 후 WebSocket 브릿지 시작"""
@@ -784,14 +799,24 @@ class VehicleSystem:
         
         # Start web server for React dashboard
         if self.web_server:
-            self.web_server.start()
+            self.logger.info("🌐 Starting web server for React dashboard...")
+            if self.web_server.start():
+                self.logger.info(f"✅ Web server ready on http://0.0.0.0:{self.web_port}")
+            else:
+                self.logger.error("❌ Web server failed to start")
         
         # Start speed sensor
         if self.speed_sensor:
+            self.logger.info("🚀 Starting speed sensor...")
             if self.speed_sensor.start():
-                self.logger.info("✅ Speed sensor started")
+                self.logger.info("✅ Speed sensor started successfully")
+                # Test initial speed data
+                initial_data = self.speed_sensor.get_speed_data()
+                self.logger.info(f"📊 Initial speed data: {initial_data}")
             else:
                 self.logger.warning("⚠️ Speed sensor failed to start")
+        else:
+            self.logger.warning("⚠️ Speed sensor not initialized")
         
         # Start dashboard thread
         if PYGAME_AVAILABLE:
