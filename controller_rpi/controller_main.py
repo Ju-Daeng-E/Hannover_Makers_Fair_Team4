@@ -82,7 +82,7 @@ class MockGamepad:
 class ControllerSystem:
     """Main controller system"""
     
-    def __init__(self, vehicle_ip: str = "192.168.86.21", vehicle_port: int = 8888):
+    def __init__(self, vehicle_ip: str = "192.168.86.59", vehicle_port: int = 8888):
         self.vehicle_ip = vehicle_ip
         self.vehicle_port = vehicle_port
         self.socket = None
@@ -300,7 +300,7 @@ class ControllerSystem:
             self.logger.error(f"❌ Connection timeout to {self.vehicle_ip}:{self.vehicle_port}")
             self.connected = False
             return False
-        except ConnectionRefused:
+        except ConnectionRefusedError:
             self.logger.error(f"❌ Connection refused by {self.vehicle_ip}:{self.vehicle_port}")
             self.connected = False
             return False
@@ -321,8 +321,9 @@ class ControllerSystem:
             loop = asyncio.get_event_loop()
             gamepad_input = await loop.run_in_executor(None, self.gamepad.read_data)
             
-            # Read analog sticks
-            self.control_data.throttle = -gamepad_input.analog_stick_right.y  # Invert Y axis
+            # Read analog sticks - Using right joystick Y-axis for throttle control
+            self.control_data.throttle = gamepad_input.analog_stick_right.y
+            
             self.control_data.steering = -gamepad_input.analog_stick_left.x   # Invert X axis
             
             # If BMW system not available, use gamepad for gear control
@@ -526,7 +527,7 @@ def main():
     print("=" * 40)
     
     # Configuration (you can modify these)
-    VEHICLE_IP = "192.168.86.21"  # Change to your vehicle Pi's IP
+    VEHICLE_IP = "192.168.86.59"  # Change to your vehicle Pi's IP
     VEHICLE_PORT = 8888
     
     controller = ControllerSystem(VEHICLE_IP, VEHICLE_PORT)
