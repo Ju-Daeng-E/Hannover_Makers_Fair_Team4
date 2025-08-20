@@ -39,6 +39,18 @@ fi
 
 # Check Python dependencies
 print_status "Checking Python dependencies..."
+
+# Check for websockets library (needed for UDP streaming)
+if ! python3 -c "import websockets" 2>/dev/null; then
+    print_status "Installing websockets library for UDP streaming..."
+    python3 -m pip install --user --break-system-packages websockets 2>/dev/null || {
+        print_error "Failed to install websockets library"
+        print_warning "UDP video streaming may not work properly"
+    }
+else
+    print_status "websockets library found"
+fi
+
 if [ -f "requirements.txt" ]; then
     # Check if we need to handle numpy compatibility
     if python3 -c "import simplejpeg" 2>/dev/null; then
@@ -70,7 +82,7 @@ elif command -v vcgencmd &> /dev/null && vcgencmd get_camera | grep -q "detected
 fi
 
 # Check for USB cameras
-for i in {0..3}; do
+for i in {0..15}; do
     if [ -e "/dev/video$i" ]; then
         print_status "USB camera detected at /dev/video$i"
         CAMERA_FOUND=true
@@ -94,8 +106,11 @@ IPS=$(hostname -I)
 for ip in $IPS; do
     if [[ $ip =~ ^192\.168\. ]] || [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\. ]]; then
         print_status "Vehicle IP: $ip"
-        print_status "🌐 Camera stream: http://$ip:8080"
+        print_status "🎛️  Vehicle Dashboard: http://$ip:8082"
+        print_status "📹 Camera stream: http://$ip:8080"
         print_status "🎮 Control port: 8888"
+        print_status ""
+        print_status "📱 Access the full dashboard from any device on the network!"
         break
     fi
 done
@@ -159,7 +174,15 @@ export PYTHONNOUSERSITE=1
 
 # Use system Python to avoid numpy compatibility issues
 print_status "Starting vehicle with system Python environment..."
-/usr/bin/python3 vehicle_main.py
+
+# Check if user wants camera only mode
+if [ "$1" = "--camera-speed" ]; then
+    print_status "Starting camera streaming with speed sensor..."
+    /usr/bin/python3 camera_stream.py --port 8080
+else
+    # Start vehicle main program with UDP streaming mode
+    /usr/bin/python3 vehicle_main.py --udp-streaming
+fi
 
 # Cleanup on exit
 cleanup
