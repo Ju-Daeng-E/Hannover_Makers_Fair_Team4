@@ -54,6 +54,174 @@ except ImportError:
 # Import speed sensor
 from speed_sensor import SpeedSensor
 
+# Battery monitoring using INA219
+try:
+    import smbus
+    INA219_AVAILABLE = True
+except ImportError:
+    print("⚠️ smbus not available - battery monitoring disabled")
+    INA219_AVAILABLE = False
+
+class BatteryMonitor:
+    """INA219 기반 배터리 모니터링"""
+    
+    def __init__(self, address=0x41, shunt_ohms=0.1):
+        self.bus = None
+        self.address = address
+        self.shunt_ohms = shunt_ohms
+        self.connected = False
+        self.last_measurement = None
+        self.last_update = 0
+        
+        if INA219_AVAILABLE:
+            self.setup()
+    
+    def setup(self):
+        """INA219 초기화"""
+        try:
+            self.bus = smbus.SMBus(1)
+            
+            # Reset
+            self.bus.write_word_data(self.address, 0x00, 0x8000)
+            time.sleep(0.1)
+            
+            # Configuration
+            config = 0x1F9F  # 16V bus, 320mV shunt, 12-bit ADC
+            self.bus.write_word_data(self.address, 0x00, config)
+            time.sleep(0.1)
+            
+            # Test read
+            test_data = self.get_measurements()
+            print(f"🔍 INA219 테스트 데이터 (0x{self.address:02X}): {test_data}")
+            
+            if test_data and test_data['bus_voltage'] > 0.1:  # 매우 관대한 범위 (0.1V 이상이면 작동)
+                self.connected = True
+                print(f"✅ INA219 배터리 모니터 초기화 완료 (주소: 0x{self.address:02X}, 전압: {test_data['bus_voltage']:.3f}V)")
+                return True
+            else:
+                print(f"⚠️ INA219 데이터 범위 이상 또는 측정 실패: {test_data}")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ INA219 초기화 실패: {e}")
+            self.connected = False
+            return False
+    
+    def read_raw(self, register):
+        """레지스터에서 원시 데이터 읽기"""
+        try:
+            if not self.bus:
+                return None
+            data = self.bus.read_word_data(self.address, register)
+            # Swap bytes (I2C MSB first)
+            return ((data & 0xFF) << 8) | ((data & 0xFF00) >> 8)
+        except Exception as e:
+            print(f"❌ Read error on register 0x{register:02X}: {e}")
+            return None
+    
+    def get_measurements(self):
+        """전압, 전류, 전력 측정"""
+        bus_raw = self.read_raw(0x02)  # Bus voltage register
+        shunt_raw = self.read_raw(0x01)  # Shunt voltage register
+        
+        if bus_raw is None or shunt_raw is None:
+            return None
+            
+        # Convert shunt to signed
+        if shunt_raw > 32767:
+            shunt_raw -= 65536
+        
+        # Calculate actual values
+        bus_voltage = (bus_raw >> 3) * 0.004  # 4mV per LSB
+        shunt_voltage_uv = shunt_raw * 10  # 10µV per LSB
+        current_ma = shunt_voltage_uv / (self.shunt_ohms * 1000)
+        power_w = bus_voltage * current_ma / 1000
+        
+        return {
+            'bus_voltage': bus_voltage,
+            'current_ma': current_ma,
+            'power_w': power_w
+        }
+    
+    def get_battery_percentage(self):
+        """배터리 잔량을 0-100% 범위로 반환"""
+        measurements = self.get_measurements()
+        if not measurements:
+            return None
+        
+        voltage = measurements['bus_voltage']
+        
+        # 다양한 전압 범위 지원
+        if voltage > 20:  # 고전압 (24V 시스템 등)
+            # 24V 시스템 기준 (20V ~ 28V)
+            min_voltage = 20.0
+            max_voltage = 28.0
+            percentage = ((voltage - min_voltage) / (max_voltage - min_voltage)) * 100
+        elif voltage > 8:  # 12V 시스템
+            # 12V 배터리 기준 (10V ~ 14V)
+            min_voltage = 10.0
+            max_voltage = 14.0
+            percentage = ((voltage - min_voltage) / (max_voltage - min_voltage)) * 100
+        elif voltage > 4.5:  # 5V USB 전원
+            # USB 전원 - 항상 100%
+            percentage = 100
+        else:  # 3.3V ~ 4.2V 리튬 배터리
+            # 리튬 배터리 기준
+            min_voltage = 3.2
+            max_voltage = 4.1
+            percentage = ((voltage - min_voltage) / (max_voltage - min_voltage)) * 100
+        
+        # 0-100% 범위로 제한
+        final_percentage = max(0, min(100, int(percentage)))
+        return final_percentage
+    
+    def update_battery_data(self):
+        """배터리 데이터 업데이트 (3초마다)"""
+        current_time = time.time()
+        
+        # 3초마다 업데이트
+        if current_time - self.last_update < 3.0:
+            return self.last_measurement
+        
+        try:
+            percentage = self.get_battery_percentage()
+            measurements = self.get_measurements()
+            
+            if percentage is not None and measurements:
+                self.last_measurement = {
+                    'battery_percentage': percentage,
+                    'battery_voltage': measurements['bus_voltage'],
+                    'battery_current': measurements['current_ma'],
+                    'battery_power': measurements['power_w'],
+                    'battery_status': 'ok',
+                    'timestamp': current_time
+                }
+            else:
+                self.last_measurement = {
+                    'battery_percentage': 0,
+                    'battery_voltage': 0,
+                    'battery_current': 0,
+                    'battery_power': 0,
+                    'battery_status': 'error',
+                    'timestamp': current_time
+                }
+            
+            self.last_update = current_time
+            return self.last_measurement
+            
+        except Exception as e:
+            print(f"❌ 배터리 데이터 업데이트 오류: {e}")
+            self.last_measurement = {
+                'battery_percentage': 0,
+                'battery_voltage': 0,
+                'battery_current': 0,
+                'battery_power': 0,
+                'battery_status': 'error',
+                'timestamp': current_time
+            }
+            self.last_update = current_time
+            return self.last_measurement
+
 @dataclass
 class ControlData:
     """Control data structure for receiving"""
@@ -292,10 +460,26 @@ class WebServer:
                 speed_data = self.vehicle_system.current_speed_data
                 print(f"🔍 API Debug - Raw speed_data: {speed_data}")
                 
-                # 데이터 유효성 확인
+                # 데이터 유효성 확인 (더 빠른 응답을 위해 기준 완화)
                 data_age = speed_data.get('age_seconds', 999)
-                is_fresh = data_age < 1.0  # 1초 이내 데이터만 신뢰 (실시간성 개선)
+                is_fresh = data_age < 0.5  # 0.5초 이내 데이터만 신뢰 (더 빠른 실시간성)
                 print(f"🔍 API Debug - data_age: {data_age}, is_fresh: {is_fresh}")
+                
+                # 배터리 데이터 가져오기
+                battery_data = {'battery_percentage': 0, 'battery_status': 'unavailable'}
+                if self.vehicle_system.battery_monitor:
+                    battery_info = self.vehicle_system.battery_monitor.update_battery_data()
+                    print(f"🔍 Battery Debug - battery_info: {battery_info}")
+                    if battery_info:
+                        battery_data = {
+                            'battery_percentage': battery_info.get('battery_percentage', 0),
+                            'battery_status': battery_info.get('battery_status', 'error'),
+                            'battery_voltage': battery_info.get('battery_voltage', 0),
+                            'battery_current': battery_info.get('battery_current', 0)
+                        }
+                        print(f"🔍 Battery Debug - processed battery_data: {battery_data}")
+                else:
+                    print("🔍 Battery Debug - no battery monitor available")
                 
                 if is_fresh:
                     # 신선한 실제 센서 데이터
@@ -303,9 +487,10 @@ class WebServer:
                         'rpmValue': int(speed_data.get('rpm', 0)),
                         'speedValue': float(speed_data.get('speed_kmh', 0.0)),
                         'gear': self.vehicle_system.current_control.gear,
-                        'fuelLevel': 75 + random.randint(-2, 2),  # 시뮬레이션
-                        'engineTemp': 90 + random.randint(-2, 2),  # 시뮬레이션
-                        'batteryLevel': 85 + random.randint(-2, 2),  # 시뮬레이션
+                        'batteryLevel': battery_data['battery_percentage'],
+                        'batteryStatus': battery_data['battery_status'],
+                        'batteryVoltage': battery_data.get('battery_voltage', 0),
+                        'batteryCurrent': battery_data.get('battery_current', 0),
                         'connectionStatus': self.vehicle_system.connection_status,
                         'sensorStatus': 'active',
                         'dataAge': round(data_age, 1)
@@ -316,22 +501,31 @@ class WebServer:
                         'rpmValue': 0,
                         'speedValue': 0.0,
                         'gear': self.vehicle_system.current_control.gear,
-                        'fuelLevel': 75,
-                        'engineTemp': 90,
-                        'batteryLevel': 85,
+                        'batteryLevel': battery_data['battery_percentage'],
+                        'batteryStatus': battery_data['battery_status'],
+                        'batteryVoltage': battery_data.get('battery_voltage', 0),
+                        'batteryCurrent': battery_data.get('battery_current', 0),
                         'connectionStatus': self.vehicle_system.connection_status,
                         'sensorStatus': 'stale',
                         'dataAge': round(data_age, 1)
                     }
             else:
-                # 센서 없거나 시스템 없음
+                # 센서 없거나 시스템 없음 - 배터리만 독립적으로 확인
+                battery_data = {'battery_percentage': 0, 'battery_status': 'unavailable'}
+                if self.vehicle_system and self.vehicle_system.battery_monitor:
+                    battery_info = self.vehicle_system.battery_monitor.update_battery_data()
+                    if battery_info:
+                        battery_data = {
+                            'battery_percentage': battery_info.get('battery_percentage', 0),
+                            'battery_status': battery_info.get('battery_status', 'error')
+                        }
+                
                 data = {
                     'rpmValue': 0,
                     'speedValue': 0.0,
                     'gear': 'N',
-                    'fuelLevel': 75,
-                    'engineTemp': 90,
-                    'batteryLevel': 85,
+                    'batteryLevel': battery_data['battery_percentage'],
+                    'batteryStatus': battery_data['battery_status'],
                     'connectionStatus': 'Disconnected',
                     'sensorStatus': 'unavailable',
                     'dataAge': 999
@@ -486,6 +680,20 @@ class VehicleSystem:
             self.logger.warning(f"⚠️ Speed sensor initialization failed: {e}")
             self.speed_sensor = None
             self.current_speed_data = {'rpm': 0, 'speed_kmh': 0.0, 'speed_ms': 0.0}
+        
+        # Initialize battery monitor - PiRacer 내장 INA219 사용 (0x41)
+        self.battery_monitor = None
+        try:
+            self.battery_monitor = BatteryMonitor(address=0x41)
+            if self.battery_monitor.connected:
+                self.logger.info(f"✅ Battery monitor initialized at 0x41 (PiRacer built-in)")
+            else:
+                self.logger.warning(f"⚠️ Battery monitor failed at 0x41")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Battery monitor initialization failed at 0x41: {e}")
+        
+        if not self.battery_monitor:
+            self.logger.warning("⚠️ No working battery monitor found")
         
         # Control state
         self.current_control = ControlData()
@@ -693,7 +901,7 @@ class VehicleSystem:
                     # Debug log every 5 seconds
                     if int(time.time()) % 5 == 0:
                         self.logger.info(f"🔄 Speed data updated: RPM={new_data.get('rpm', 0)}, Speed={new_data.get('speed_kmh', 0.0):.1f}km/h")
-                time.sleep(0.02)  # 50Hz update rate (2x faster)
+                time.sleep(0.01)  # 100Hz update rate (더 빠른 센서 업데이트)
             except Exception as e:
                 self.logger.error(f"❌ Speed sensor update error: {e}")
                 time.sleep(1)  # Wait before retry

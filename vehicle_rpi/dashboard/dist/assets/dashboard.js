@@ -5,18 +5,14 @@ class VehicleDashboard {
             rpmValue: 0,
             speedValue: 0,
             gear: 'D',
-            fuelLevel: 75,
-            engineTemp: 90,
-            batteryLevel: 85,
+            batteryLevel: 0,
             connectionStatus: 'Connected'
         };
         
         this.animatedValues = {
             rpm: 0,
             speed: 0,
-            fuel: 75,
-            temp: 90,
-            battery: 85
+            battery: 0
         };
         
         this.isInitialized = false;
@@ -92,9 +88,7 @@ class VehicleDashboard {
             rpmValue: Math.max(0, Math.round(rpmBase + (Math.random() - 0.5) * 100)),
             speedValue: Math.max(0, Math.round((speedBase + (Math.random() - 0.5) * 2) * 10) / 10),
             gear: ['D', 'R', 'N', 'P'][Math.floor(Math.random() * 4)],
-            fuelLevel: 75 + Math.sin(time * 0.05) * 10,
-            engineTemp: 90 + Math.sin(time * 0.08) * 5,
-            batteryLevel: 85 + Math.sin(time * 0.03) * 8,
+            batteryLevel: 0, // Will be handled by real INA sensor
             connectionStatus: 'Connected'
         };
     }
@@ -144,7 +138,7 @@ class VehicleDashboard {
         this.fetchVehicleData(); // Initial fetch
         this.updateInterval = setInterval(() => {
             this.fetchVehicleData();
-        }, 500); // Update every 500ms for smooth data
+        }, 200); // Update every 200ms for faster response
     }
     
     startAnimationLoop() {
@@ -176,23 +170,11 @@ class VehicleDashboard {
             animationSpeed
         );
         
-        // Animate other values
-        this.animatedValues.fuel = lerp(
-            this.animatedValues.fuel, 
-            this.currentData.fuelLevel, 
-            animationSpeed * 0.5
-        );
-        
-        this.animatedValues.temp = lerp(
-            this.animatedValues.temp, 
-            this.currentData.engineTemp, 
-            animationSpeed * 0.5
-        );
-        
+        // Animate battery value
         this.animatedValues.battery = lerp(
             this.animatedValues.battery, 
             this.currentData.batteryLevel, 
-            animationSpeed * 0.5
+            animationSpeed * 0.3  // Slower animation for battery
         );
         
         // Update UI
@@ -204,8 +186,8 @@ class VehicleDashboard {
         // SVG circle with radius 85 has circumference = 2 * PI * 85 ≈ 534
         const circumference = 534;
         
-        // Update RPM gauge (max 2000)
-        const rpmPercent = Math.min(this.animatedValues.rpm / 2000, 1);
+        // Update RPM gauge (max 300)
+        const rpmPercent = Math.min(this.animatedValues.rpm / 300, 1);
         const rpmOffset = circumference - (rpmPercent * circumference);
         
         const rpmElement = document.getElementById('rpmProgress');
@@ -219,8 +201,8 @@ class VehicleDashboard {
             rpmValueElement.textContent = Math.round(this.animatedValues.rpm);
         }
         
-        // Update Speed gauge (max 20 km/h)
-        const speedPercent = Math.min(this.animatedValues.speed / 20, 1);
+        // Update Speed gauge (max 5 km/h)
+        const speedPercent = Math.min(this.animatedValues.speed / 5, 1);
         const speedOffset = circumference - (speedPercent * circumference);
         
         const speedElement = document.getElementById('speedProgress');
@@ -251,17 +233,29 @@ class VehicleDashboard {
     }
     
     updateStatusValues() {
-        // Update fuel level
-        document.getElementById('fuelValue').textContent = 
-            Math.round(this.animatedValues.fuel) + '%';
+        // Update battery level with proper status handling
+        const batteryElement = document.getElementById('batteryValue');
+        const batteryStatus = this.currentData.batteryStatus || 'unknown';
         
-        // Update temperature
-        document.getElementById('tempValue').textContent = 
-            Math.round(this.animatedValues.temp) + '°C';
-        
-        // Update battery level
-        document.getElementById('batteryValue').textContent = 
-            Math.round(this.animatedValues.battery) + '%';
+        if (batteryStatus === 'unavailable' || batteryStatus === 'error') {
+            batteryElement.textContent = 'N/A';
+            batteryElement.style.color = '#ef4444'; // Red
+        } else if (batteryStatus === 'ok' && this.animatedValues.battery >= 0) {
+            const batteryPercent = Math.round(this.animatedValues.battery);
+            batteryElement.textContent = batteryPercent + '%';
+            
+            // Color coding based on battery level
+            if (batteryPercent > 50) {
+                batteryElement.style.color = '#4ade80'; // Green
+            } else if (batteryPercent > 20) {
+                batteryElement.style.color = '#facc15'; // Yellow
+            } else {
+                batteryElement.style.color = '#ef4444'; // Red
+            }
+        } else {
+            batteryElement.textContent = '---%';
+            batteryElement.style.color = '#94a3b8'; // Gray
+        }
     }
     
     destroy() {
