@@ -236,8 +236,24 @@ python3 camera_stream.py
 # HTTP mode (default)
 python3 camera_stream.py --port 8080 --width 800 --height 600 --fps 30
 
-# UDP mode (high performance)
+# UDP mode (high performance) - requires WebSocket bridge for browser access
 python3 camera_stream.py --udp --udp-port 9999
+
+# Start WebSocket bridge separately for UDP mode
+./run_websocket_bridge.sh 9999 8765
+```
+
+### UDP Streaming with WebSocket Bridge
+```bash
+# Complete UDP streaming setup
+# Terminal 1: Start vehicle with UDP streaming
+python3 vehicle_main.py --udp-streaming --udp-port 9999 --websocket-port 8765
+
+# WebSocket bridge starts automatically, or manually:
+./run_websocket_bridge.sh 9999 8765
+
+# Browser access: ws://[vehicle-ip]:8765 for video stream
+# Dashboard access: http://[vehicle-ip]:8082
 ```
 
 ### Development Mode
@@ -246,6 +262,11 @@ python3 camera_stream.py --udp --udp-port 9999
 export PIRACER_MOCK=1
 export CAMERA_MOCK=1
 python3 vehicle_main.py
+
+# Test UDP streaming components separately
+python3 udp_client.py --host localhost --port 9999  # Test UDP reception
+python3 test_websockets.py  # Test WebSocket connections
+./quick_websocket_test.sh   # Quick WebSocket bridge test
 ```
 
 ## 📊 Performance Specifications
