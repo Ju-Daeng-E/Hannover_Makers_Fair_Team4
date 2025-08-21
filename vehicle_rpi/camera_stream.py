@@ -240,26 +240,17 @@ class CameraStreamer:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cv2.putText(frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
-            # Add speed information if available
-            if self.speed_sensor:
-                speed_data = self.speed_sensor.get_speed_data()
-                
-                # Check if data is fresh (within 2 seconds)
-                if speed_data['age_seconds'] <= 2.0:
-                    # Add RPM (RGB format: Cyan = (0, 255, 255))
-                    rpm_text = f"RPM: {speed_data['rpm']}"
-                    cv2.putText(frame, rpm_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                    
-                    # Add Speed in km/h (RGB format: Yellow = (255, 255, 0))
-                    speed_text = f"Speed: {speed_data['speed_kmh']:.1f} km/h"
-                    cv2.putText(frame, speed_text, (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-                    
-                    # Add Speed in m/s (RGB format: Orange = (255, 165, 0))
-                    speed_ms_text = f"({speed_data['speed_ms']:.2f} m/s)"
-                    cv2.putText(frame, speed_ms_text, (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
-                else:
-                    # Show "No Speed Data" if data is stale
-                    cv2.putText(frame, "Speed: No Data", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
+            # Calculate and display stream delay
+            if not hasattr(self, 'frame_start_time'):
+                self.frame_start_time = time.time()
+            
+            current_time = time.time()
+            frame_capture_delay = (current_time - self.frame_start_time) * 1000  # ms
+            self.frame_start_time = current_time
+            
+            # Add stream delay info (RGB format: Cyan = (0, 255, 255))
+            delay_text = f"Stream Delay: {frame_capture_delay:.1f}ms"
+            cv2.putText(frame, delay_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
             
             # Add system info (RGB format: White = (255, 255, 255))
             cv2.putText(frame, "RC Car Live Stream", (10, frame.shape[0] - 20), 
@@ -280,7 +271,7 @@ class CameraStreamer:
             from udp_streamer import UDPVideoStreamer
             self.udp_streamer = UDPVideoStreamer(
                 port=self.udp_port,
-                quality=40,  # 고속 전송을 위한 낮은 품질
+                quality=75,  # 고속 전송을 위한 낮은 품질
                 max_fps=60   # 높은 프레임율
             )
             self.logger.info(f"✅ UDP 스트리밍 준비: 포트 {self.udp_port}")
