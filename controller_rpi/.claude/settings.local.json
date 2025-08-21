@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sudo:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(touch:*)",
+      "Bash(chmod:*)",
+      "Bash(python:*)",
+      "Bash(grep:*)",
+      "Bash(pkill:*)",
+      "Bash(ping:*)",
+      "Bash(nc:*)",
+      "Bash(telnet:*)",
+      "WebFetch(domain:openinverter.org)",
+      "Bash(timeout:*)",
+      "Bash(claude mcp add:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(git pull:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}
